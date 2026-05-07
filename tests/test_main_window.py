@@ -197,7 +197,20 @@ def test_new_note_defaults_to_body_font_size(vault_path: Path, monkeypatch, qt_a
     record = window.service.get_record(window.current_note_id)
 
     assert f"font-size:{NOTE_BODY_FONT_SIZE_PT}pt" in record.note
-    assert window.note_font_size.value() == NOTE_BODY_FONT_SIZE_PT
+    assert window.note_font_size.currentText() == str(NOTE_BODY_FONT_SIZE_PT)
+
+    window.close()
+
+
+def test_note_toolbar_keeps_format_brush_and_font_size_compact(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+
+    assert window.note_format_brush_button.objectName() == "FormatButton"
+    assert not window.note_format_brush_button.text()
+    assert not window.note_format_brush_button.icon().isNull()
+    assert window.note_font_size.objectName() == "FontSizeCombo"
+    assert window.note_font_size.currentText() == str(NOTE_BODY_FONT_SIZE_PT)
+    assert window.note_font_size.minimumWidth() <= 70
 
     window.close()
 
@@ -209,7 +222,7 @@ def test_note_font_size_control_applies_selected_size(qt_app) -> None:
     cursor.select(cursor.SelectionType.Document)
     window.note_body.setTextCursor(cursor)
 
-    window.note_font_size.setValue(16)
+    window.note_font_size.setCurrentText("16")
 
     assert window.note_body.textCursor().charFormat().fontPointSize() == 16
 

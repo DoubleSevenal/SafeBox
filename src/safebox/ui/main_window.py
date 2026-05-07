@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QPixmap, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QIcon, QPixmap, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -60,6 +60,7 @@ from safebox.ui.dialogs import (
     VaultOpenMode,
 )
 
+FORMAT_BRUSH_ICON_PATH = Path(__file__).resolve().parent / "assets" / "format-brush.svg"
 AUTO_LOCK_PRESETS = {
     "5分钟": 5 * 60,
     "20分钟": 20 * 60,
@@ -84,7 +85,7 @@ class MainWindow(QMainWindow):
         self.account_editing = False
         self.note_editing = False
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
-        self.note_format_buttons: list[QPushButton | QSpinBox] = []
+        self.note_format_buttons: list[QPushButton | QComboBox] = []
         self.note_format_brush: QTextCharFormat | None = None
         self.idle_timer = QTimer(self)
         self.idle_timer.setInterval(self.profile_settings.auto_lock_seconds * 1000)
@@ -374,18 +375,22 @@ class MainWindow(QMainWindow):
         heading.setObjectName("FormatButtonWide")
         body = QPushButton("正文")
         body.setObjectName("FormatButtonWide")
-        format_brush = QPushButton("格式刷")
-        format_brush.setObjectName("FormatButtonWide")
+        self.note_format_brush_button = QPushButton("")
+        self.note_format_brush_button.setObjectName("FormatButton")
+        self.note_format_brush_button.setIcon(QIcon(str(FORMAT_BRUSH_ICON_PATH)))
+        self.note_format_brush_button.setIconSize(QSize(18, 18))
+        self.note_format_brush_button.setToolTip("格式刷")
         clear_format = QPushButton("清格式")
         clear_format.setObjectName("FormatButtonWide")
         copy_all = QPushButton("复制全文")
         copy_all.setObjectName("FormatButtonWide")
-        self.note_font_size = QSpinBox()
-        self.note_font_size.setObjectName("FontSizeSpinBox")
-        self.note_font_size.setRange(8, 36)
-        self.note_font_size.setValue(NOTE_BODY_FONT_SIZE_PT)
-        self.note_font_size.setSuffix(" pt")
-        self.note_font_size.setFixedWidth(78)
+        self.note_font_size = QComboBox()
+        self.note_font_size.setObjectName("FontSizeCombo")
+        self.note_font_size.addItems(
+            ["10", "11", "12", "13", "14", "16", "18", "20", "24", "28", "32"]
+        )
+        self.note_font_size.setCurrentText(str(NOTE_BODY_FONT_SIZE_PT))
+        self.note_font_size.setFixedWidth(64)
         color_black = QPushButton("")
         color_black.setObjectName("ColorButtonBlack")
         color_blue = QPushButton("")
@@ -401,9 +406,9 @@ class MainWindow(QMainWindow):
             italic,
             underline,
             bullet,
+            self.note_format_brush_button,
             heading,
             body,
-            format_brush,
             clear_format,
             copy_all,
         ):
@@ -421,9 +426,9 @@ class MainWindow(QMainWindow):
             italic,
             underline,
             bullet,
+            self.note_format_brush_button,
             heading,
             body,
-            format_brush,
             clear_format,
             self.note_font_size,
             color_black,
@@ -450,10 +455,10 @@ class MainWindow(QMainWindow):
         bullet.clicked.connect(self._insert_bullet)
         heading.clicked.connect(lambda: self._set_text_size(NOTE_HEADING_FONT_SIZE_PT))
         body.clicked.connect(lambda: self._set_text_size(NOTE_BODY_FONT_SIZE_PT))
-        format_brush.clicked.connect(self._use_note_format_brush)
+        self.note_format_brush_button.clicked.connect(self._use_note_format_brush)
         clear_format.clicked.connect(self._clear_note_format)
         copy_all.clicked.connect(self._copy_note_plain_text)
-        self.note_font_size.valueChanged.connect(self._set_text_size)
+        self.note_font_size.currentTextChanged.connect(self._set_text_size_from_text)
         color_black.clicked.connect(lambda: self._set_text_color("#111827"))
         color_blue.clicked.connect(lambda: self._set_text_color("#2563eb"))
         color_pink.clicked.connect(lambda: self._set_text_color("#db2777"))
@@ -1260,9 +1265,20 @@ class MainWindow(QMainWindow):
         self._merge_note_format(text_format)
 
     def _set_text_size(self, size: int) -> None:
+        if self.note_font_size.currentText() != str(size):
+            self.note_font_size.blockSignals(True)
+            self.note_font_size.setCurrentText(str(size))
+            self.note_font_size.blockSignals(False)
         text_format = QTextCharFormat()
         text_format.setFontPointSize(size)
         self._merge_note_format(text_format)
+
+    def _set_text_size_from_text(self, size_text: str) -> None:
+        try:
+            size = int(size_text)
+        except ValueError:
+            return
+        self._set_text_size(size)
 
     def _set_text_color(self, color: str) -> None:
         text_format = QTextCharFormat()

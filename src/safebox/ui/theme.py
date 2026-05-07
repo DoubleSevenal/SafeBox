@@ -344,8 +344,7 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     padding: 7px 11px;
     font-size: 14px;
 }
-QSpinBox#MinuteSpinBox,
-QSpinBox#FontSizeSpinBox {
+QSpinBox#MinuteSpinBox {
     min-height: 36px;
     border-radius: 10px;
     border: 1px solid #d4deeb;
@@ -357,8 +356,7 @@ QLineEdit:focus,
 QTextEdit:focus,
 QPlainTextEdit:focus,
 QComboBox:focus,
-QSpinBox#MinuteSpinBox:focus,
-QSpinBox#FontSizeSpinBox:focus {
+QSpinBox#MinuteSpinBox:focus {
     border: 1px solid #3b82f6;
 }
 QLabel#VaultFormLabel {
@@ -452,6 +450,35 @@ QTextEdit#NoteBody {
     font-size: 16px;
     line-height: 1.55;
     padding: 12px;
+}
+QComboBox#FontSizeCombo {
+    min-width: 58px;
+    min-height: 32px;
+    max-height: 32px;
+    border-radius: 8px;
+    background: #ffffff;
+    border: 1px solid #d4deeb;
+    padding: 4px 28px 4px 10px;
+    font-size: 13px;
+    font-weight: 700;
+}
+QComboBox#FontSizeCombo:hover {
+    background: #eaf2ff;
+    border-color: #93c5fd;
+}
+QComboBox#FontSizeCombo::drop-down {
+    width: 24px;
+    border: 0;
+    border-left: 1px solid #e2e8f0;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    background: #f6f9fe;
+}
+QComboBox#FontSizeCombo::down-arrow {
+    image: url(__CHEVRON_DOWN_ICON__);
+    width: 12px;
+    height: 12px;
+    margin-right: 6px;
 }
 QComboBox {
     padding-right: 38px;
