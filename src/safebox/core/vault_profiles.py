@@ -70,7 +70,7 @@ def save_profile_settings(base_dir: Path, name: str, settings: VaultProfileSetti
 def sync_vault_to_backup(vault_path: Path, backup_dir: Path, name: str) -> Path:
     backup_dir.mkdir(parents=True, exist_ok=True)
     target = backup_file_for_vault(backup_dir, name)
-    shutil.copy2(vault_path, target)
+    shutil.copyfile(vault_path, target)
     return target
 
 

@@ -344,7 +344,8 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     padding: 7px 11px;
     font-size: 14px;
 }
-QSpinBox#MinuteSpinBox {
+QSpinBox#MinuteSpinBox,
+QSpinBox#FontSizeSpinBox {
     min-height: 36px;
     border-radius: 10px;
     border: 1px solid #d4deeb;
@@ -356,7 +357,8 @@ QLineEdit:focus,
 QTextEdit:focus,
 QPlainTextEdit:focus,
 QComboBox:focus,
-QSpinBox#MinuteSpinBox:focus {
+QSpinBox#MinuteSpinBox:focus,
+QSpinBox#FontSizeSpinBox:focus {
     border: 1px solid #3b82f6;
 }
 QLabel#VaultFormLabel {

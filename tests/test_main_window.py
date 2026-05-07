@@ -4,7 +4,7 @@ from safebox.core.services import VaultService
 from safebox.core.vault_profiles import load_profile_settings, vault_path_for_name
 from safebox.ui import main_window
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
-from safebox.ui.main_window import MainWindow
+from safebox.ui.main_window import NOTE_BODY_FONT_SIZE_PT, MainWindow
 
 
 class FakeVaultOpenDialog:
@@ -177,5 +177,65 @@ def test_settings_can_disable_and_customize_auto_lock(
     window.auto_lock_combo.setCurrentText("20分钟")
     assert window.idle_timer.interval() == 20 * 60 * 1000
     assert load_profile_settings(base_dir, "于祥磊").auto_lock_seconds == 20 * 60
+
+    window.close()
+
+
+def test_new_note_defaults_to_body_font_size(vault_path: Path, monkeypatch, qt_app) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window._new_note()
+    record = window.service.get_record(window.current_note_id)
+
+    assert f"font-size:{NOTE_BODY_FONT_SIZE_PT}pt" in record.note
+    assert window.note_font_size.value() == NOTE_BODY_FONT_SIZE_PT
+
+    window.close()
+
+
+def test_note_font_size_control_applies_selected_size(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+    window.note_body.setPlainText("hello")
+    cursor = window.note_body.textCursor()
+    cursor.select(cursor.SelectionType.Document)
+    window.note_body.setTextCursor(cursor)
+
+    window.note_font_size.setValue(16)
+
+    assert window.note_body.textCursor().charFormat().fontPointSize() == 16
+
+    window.close()
+
+
+def test_note_format_brush_copies_current_text_format(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+    window.note_body.setPlainText("source target")
+    cursor = window.note_body.textCursor()
+    cursor.setPosition(0)
+    cursor.setPosition(6, cursor.MoveMode.KeepAnchor)
+    window.note_body.setTextCursor(cursor)
+    window._set_text_size(18)
+    window._set_text_color("#2563eb")
+
+    window._capture_note_format()
+    cursor = window.note_body.textCursor()
+    cursor.setPosition(7)
+    cursor.setPosition(13, cursor.MoveMode.KeepAnchor)
+    window.note_body.setTextCursor(cursor)
+    window._apply_note_format_brush()
+
+    applied = window.note_body.textCursor().charFormat()
+    assert applied.fontPointSize() == 18
+    assert applied.foreground().color().name() == "#2563eb"
+    assert window.note_format_brush is None
 
     window.close()

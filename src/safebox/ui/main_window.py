@@ -65,6 +65,8 @@ AUTO_LOCK_PRESETS = {
     "20分钟": 20 * 60,
     "从不锁定": 0,
 }
+NOTE_BODY_FONT_SIZE_PT = 13
+NOTE_HEADING_FONT_SIZE_PT = 18
 
 
 class MainWindow(QMainWindow):
@@ -82,7 +84,8 @@ class MainWindow(QMainWindow):
         self.account_editing = False
         self.note_editing = False
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
-        self.note_format_buttons: list[QPushButton] = []
+        self.note_format_buttons: list[QPushButton | QSpinBox] = []
+        self.note_format_brush: QTextCharFormat | None = None
         self.idle_timer = QTimer(self)
         self.idle_timer.setInterval(self.profile_settings.auto_lock_seconds * 1000)
         self.idle_timer.timeout.connect(self._lock)
@@ -371,10 +374,18 @@ class MainWindow(QMainWindow):
         heading.setObjectName("FormatButtonWide")
         body = QPushButton("正文")
         body.setObjectName("FormatButtonWide")
+        format_brush = QPushButton("格式刷")
+        format_brush.setObjectName("FormatButtonWide")
         clear_format = QPushButton("清格式")
         clear_format.setObjectName("FormatButtonWide")
         copy_all = QPushButton("复制全文")
         copy_all.setObjectName("FormatButtonWide")
+        self.note_font_size = QSpinBox()
+        self.note_font_size.setObjectName("FontSizeSpinBox")
+        self.note_font_size.setRange(8, 36)
+        self.note_font_size.setValue(NOTE_BODY_FONT_SIZE_PT)
+        self.note_font_size.setSuffix(" pt")
+        self.note_font_size.setFixedWidth(78)
         color_black = QPushButton("")
         color_black.setObjectName("ColorButtonBlack")
         color_blue = QPushButton("")
@@ -385,8 +396,19 @@ class MainWindow(QMainWindow):
         color_green.setObjectName("ColorButtonGreen")
         color_orange = QPushButton("")
         color_orange.setObjectName("ColorButtonOrange")
-        for button in (bold, italic, underline, bullet, heading, body, clear_format, copy_all):
+        for button in (
+            bold,
+            italic,
+            underline,
+            bullet,
+            heading,
+            body,
+            format_brush,
+            clear_format,
+            copy_all,
+        ):
             toolbar.addWidget(button)
+        toolbar.addWidget(self.note_font_size)
         toolbar.addSpacing(8)
         for button in (color_black, color_blue, color_pink, color_green, color_orange):
             toolbar.addWidget(button)
@@ -401,7 +423,9 @@ class MainWindow(QMainWindow):
             bullet,
             heading,
             body,
+            format_brush,
             clear_format,
+            self.note_font_size,
             color_black,
             color_blue,
             color_pink,
@@ -424,10 +448,12 @@ class MainWindow(QMainWindow):
         italic.clicked.connect(lambda: self._toggle_text_property("italic"))
         underline.clicked.connect(lambda: self._toggle_text_property("underline"))
         bullet.clicked.connect(self._insert_bullet)
-        heading.clicked.connect(lambda: self._set_text_size(18))
-        body.clicked.connect(lambda: self._set_text_size(13))
+        heading.clicked.connect(lambda: self._set_text_size(NOTE_HEADING_FONT_SIZE_PT))
+        body.clicked.connect(lambda: self._set_text_size(NOTE_BODY_FONT_SIZE_PT))
+        format_brush.clicked.connect(self._use_note_format_brush)
         clear_format.clicked.connect(self._clear_note_format)
         copy_all.clicked.connect(self._copy_note_plain_text)
+        self.note_font_size.valueChanged.connect(self._set_text_size)
         color_black.clicked.connect(lambda: self._set_text_color("#111827"))
         color_blue.clicked.connect(lambda: self._set_text_color("#2563eb"))
         color_pink.clicked.connect(lambda: self._set_text_color("#db2777"))
@@ -1058,7 +1084,7 @@ class MainWindow(QMainWindow):
     def _new_note(self) -> None:
         note = self.service.create_secure_note(
             name="未命名小纸条",
-            note='<p style="font-size:13pt;"></p>',
+            note=f'<p style="font-size:{NOTE_BODY_FONT_SIZE_PT}pt;"></p>',
             category="收件箱",
         )
         self.current_note_id = note.id
@@ -1119,6 +1145,8 @@ class MainWindow(QMainWindow):
 
     def _set_note_edit_mode(self, editing: bool) -> None:
         self.note_editing = editing
+        if not editing:
+            self.note_format_brush = None
         self.note_title_input.setReadOnly(not editing)
         self.note_category.setEnabled(editing)
         self.note_body.setReadOnly(not editing)
@@ -1240,6 +1268,23 @@ class MainWindow(QMainWindow):
         text_format = QTextCharFormat()
         text_format.setForeground(QColor(color))
         self._merge_note_format(text_format)
+
+    def _capture_note_format(self) -> None:
+        self.note_format_brush = QTextCharFormat(self.note_body.currentCharFormat())
+        self._show_note_save_notice("已吸取格式")
+
+    def _apply_note_format_brush(self) -> None:
+        if self.note_format_brush is None:
+            return
+        self._merge_note_format(self.note_format_brush)
+        self.note_format_brush = None
+        self._show_note_save_notice("已应用格式")
+
+    def _use_note_format_brush(self) -> None:
+        if self.note_format_brush is None:
+            self._capture_note_format()
+        else:
+            self._apply_note_format_brush()
 
     def _clear_note_format(self) -> None:
         cursor = self.note_body.textCursor()
