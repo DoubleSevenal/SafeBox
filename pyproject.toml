@@ -1,0 +1,36 @@
+[project]
+name = "safebox"
+version = "0.1.0"
+description = "Local Windows 11 style password and private notes manager"
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=42.0.0",
+  "PySide6>=6.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--basetemp=.pytest-tmp"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  ".git",
+  ".pytest_cache",
+  ".pytest-tmp",
+  ".ruff_cache",
+  ".test-output",
+  "__pycache__",
+  "pytest-cache-files-*",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
