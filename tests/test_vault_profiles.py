@@ -1,8 +1,11 @@
 from pathlib import Path
 
 from safebox.core.vault_profiles import (
+    VaultProfileSettings,
     backup_file_for_vault,
+    load_profile_settings,
     safe_vault_slug,
+    save_profile_settings,
     vault_path_for_name,
 )
 
@@ -22,3 +25,18 @@ def test_backup_file_is_one_file_per_vault() -> None:
     path = backup_file_for_vault(Path("backup"), "school")
 
     assert path == Path("backup") / "SafeBox-school.pmbackup"
+
+
+def test_profile_settings_persist_auto_lock_seconds(tmp_path: Path) -> None:
+    settings = VaultProfileSettings(
+        backup_dir="D:\\SafeBoxBackup",
+        auto_sync_on_close=False,
+        auto_lock_seconds=1200,
+    )
+
+    save_profile_settings(tmp_path, "school", settings)
+    loaded = load_profile_settings(tmp_path, "school")
+
+    assert loaded.backup_dir == "D:\\SafeBoxBackup"
+    assert not loaded.auto_sync_on_close
+    assert loaded.auto_lock_seconds == 1200

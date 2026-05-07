@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from safebox.core.services import VaultService
-from safebox.core.vault_profiles import vault_path_for_name
+from safebox.core.vault_profiles import load_profile_settings, vault_path_for_name
 from safebox.ui import main_window
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
 from safebox.ui.main_window import MainWindow
@@ -144,5 +144,38 @@ def test_home_header_uses_project_bundled_brand_mark(qt_app) -> None:
     assert window.header_brand_mark.pixmap() is not None
     assert window.header_brand_mark.layoutDirection().name == "LeftToRight"
     assert window.header_brand_mark.parent() is window.header_brand
+
+    window.close()
+
+
+def test_settings_can_disable_and_customize_auto_lock(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window.auto_lock_combo.setCurrentText("从不锁定")
+    assert not window.idle_timer.isActive()
+    assert load_profile_settings(base_dir, "于祥磊").auto_lock_seconds == 0
+
+    window.auto_lock_combo.setCurrentText("自定义")
+    window.custom_auto_lock_minutes.setValue(13)
+    assert window.idle_timer.interval() == 13 * 60 * 1000
+    assert window.idle_timer.isActive()
+    assert load_profile_settings(base_dir, "于祥磊").auto_lock_seconds == 13 * 60
+
+    window.auto_lock_combo.setCurrentText("20分钟")
+    assert window.idle_timer.interval() == 20 * 60 * 1000
+    assert load_profile_settings(base_dir, "于祥磊").auto_lock_seconds == 20 * 60
 
     window.close()

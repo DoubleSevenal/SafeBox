@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
@@ -48,8 +49,8 @@ from safebox.core.vault_profiles import (
     save_profile_settings,
     sync_vault_to_backup,
 )
-from safebox.ui.clipboard import SecureClipboard
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
+from safebox.ui.clipboard import SecureClipboard
 from safebox.ui.dialogs import (
     DEFAULT_VAULT_ID,
     NOTE_CATEGORIES,
@@ -58,6 +59,12 @@ from safebox.ui.dialogs import (
     VaultOpenDialog,
     VaultOpenMode,
 )
+
+AUTO_LOCK_PRESETS = {
+    "5分钟": 5 * 60,
+    "20分钟": 20 * 60,
+    "从不锁定": 0,
+}
 
 
 class MainWindow(QMainWindow):
@@ -77,7 +84,7 @@ class MainWindow(QMainWindow):
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
         self.note_format_buttons: list[QPushButton] = []
         self.idle_timer = QTimer(self)
-        self.idle_timer.setInterval(self.settings.auto_lock_seconds * 1000)
+        self.idle_timer.setInterval(self.profile_settings.auto_lock_seconds * 1000)
         self.idle_timer.timeout.connect(self._lock)
         self.setWindowTitle("SafeBox")
         self._build_ui()
@@ -485,6 +492,14 @@ class MainWindow(QMainWindow):
         restore_backup.setObjectName("SubtleButton")
         self.auto_sync_check = QCheckBox("关闭软件时自动同步当前保险箱")
         self.auto_sync_check.setChecked(True)
+        self.auto_lock_combo = QComboBox()
+        self.auto_lock_combo.addItems(("5分钟", "20分钟", "自定义", "从不锁定"))
+        self.auto_lock_combo.setObjectName("CategoryCombo")
+        self.custom_auto_lock_minutes = QSpinBox()
+        self.custom_auto_lock_minutes.setRange(1, 24 * 60)
+        self.custom_auto_lock_minutes.setSuffix(" 分钟")
+        self.custom_auto_lock_minutes.setObjectName("MinuteSpinBox")
+        self.custom_auto_lock_minutes.setVisible(False)
         change_password = QPushButton("修改保险箱密码")
         change_password.setObjectName("PrimaryButton")
         layout.addWidget(title)
@@ -520,12 +535,26 @@ class MainWindow(QMainWindow):
         security_actions.addStretch()
         security_actions.addWidget(change_password)
         security_card.layout().addLayout(security_actions)
+        auto_lock_row = QFrame()
+        auto_lock_row.setObjectName("SettingsRow")
+        auto_lock_layout = QHBoxLayout(auto_lock_row)
+        auto_lock_layout.setContentsMargins(12, 10, 12, 10)
+        auto_lock_layout.setSpacing(12)
+        auto_lock_label = QLabel("自动锁定")
+        auto_lock_label.setObjectName("SettingsLabel")
+        auto_lock_layout.addWidget(auto_lock_label)
+        auto_lock_layout.addWidget(self.auto_lock_combo)
+        auto_lock_layout.addWidget(self.custom_auto_lock_minutes)
+        auto_lock_layout.addStretch()
+        security_card.layout().addWidget(auto_lock_row)
         layout.addWidget(security_card)
         layout.addStretch()
         choose_backup.clicked.connect(self._choose_backup_dir)
         sync_now.clicked.connect(self._sync_current_vault)
         restore_backup.clicked.connect(self._restore_current_vault_from_backup)
         self.auto_sync_check.toggled.connect(self._set_auto_sync_on_close)
+        self.auto_lock_combo.currentTextChanged.connect(self._set_auto_lock_mode)
+        self.custom_auto_lock_minutes.valueChanged.connect(self._set_custom_auto_lock_minutes)
         change_password.clicked.connect(self._change_master_password)
         return page
 
@@ -570,7 +599,7 @@ class MainWindow(QMainWindow):
         self.service = self.service_factory(vault_name)
         self.settings = AppSettings(vault_path=self.service.store.path)
         self.profile_settings = load_profile_settings(self.profile_base_dir, vault_name)
-        self.idle_timer.setInterval(self.settings.auto_lock_seconds * 1000)
+        self._apply_auto_lock_settings()
         if not password:
             QMessageBox.warning(self, "信息不完整", "保险箱密码需要填写。")
             QTimer.singleShot(0, self._open_vault)
@@ -595,7 +624,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "保险箱不存在", "这个保险箱ID还没有注册，请先注册保险箱。")
             QTimer.singleShot(0, self._open_vault)
             return
-        self.idle_timer.start()
+        self._apply_auto_lock_settings()
         self.vault_subtitle.setText(f"保险箱ID：{self.vault_name}")
         self._refresh_settings_view()
         self._show_accounts_page()
@@ -665,6 +694,7 @@ class MainWindow(QMainWindow):
         self.auto_sync_check.blockSignals(True)
         self.auto_sync_check.setChecked(self.profile_settings.auto_sync_on_close)
         self.auto_sync_check.blockSignals(False)
+        self._sync_auto_lock_controls()
 
     def _choose_backup_dir(self) -> None:
         start_dir = self.profile_settings.backup_dir or "E:\\BaiduSyncdisk"
@@ -711,6 +741,52 @@ class MainWindow(QMainWindow):
     def _set_auto_sync_on_close(self, enabled: bool) -> None:
         self.profile_settings.auto_sync_on_close = enabled
         save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
+
+    def _sync_auto_lock_controls(self) -> None:
+        seconds = self.profile_settings.auto_lock_seconds
+        self.auto_lock_combo.blockSignals(True)
+        self.custom_auto_lock_minutes.blockSignals(True)
+        if seconds == 5 * 60:
+            self.auto_lock_combo.setCurrentText("5分钟")
+            self.custom_auto_lock_minutes.setVisible(False)
+        elif seconds == 20 * 60:
+            self.auto_lock_combo.setCurrentText("20分钟")
+            self.custom_auto_lock_minutes.setVisible(False)
+        elif seconds == 0:
+            self.auto_lock_combo.setCurrentText("从不锁定")
+            self.custom_auto_lock_minutes.setVisible(False)
+        else:
+            self.auto_lock_combo.setCurrentText("自定义")
+            self.custom_auto_lock_minutes.setValue(max(1, seconds // 60))
+            self.custom_auto_lock_minutes.setVisible(True)
+        self.custom_auto_lock_minutes.blockSignals(False)
+        self.auto_lock_combo.blockSignals(False)
+
+    def _set_auto_lock_mode(self, mode: str) -> None:
+        self.custom_auto_lock_minutes.setVisible(mode == "自定义")
+        if mode == "自定义":
+            seconds = self.custom_auto_lock_minutes.value() * 60
+        else:
+            seconds = AUTO_LOCK_PRESETS[mode]
+        self._save_auto_lock_seconds(seconds)
+
+    def _set_custom_auto_lock_minutes(self, minutes: int) -> None:
+        if self.auto_lock_combo.currentText() == "自定义":
+            self._save_auto_lock_seconds(minutes * 60)
+
+    def _save_auto_lock_seconds(self, seconds: int) -> None:
+        self.profile_settings.auto_lock_seconds = seconds
+        save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
+        self._apply_auto_lock_settings()
+
+    def _apply_auto_lock_settings(self) -> None:
+        seconds = self.profile_settings.auto_lock_seconds
+        if seconds <= 0:
+            self.idle_timer.stop()
+            return
+        self.idle_timer.setInterval(seconds * 1000)
+        if self.service.is_unlocked():
+            self.idle_timer.start()
 
     def _auto_sync_current_vault(self) -> None:
         if (
@@ -1252,6 +1328,7 @@ class MainWindow(QMainWindow):
                 QEvent.Type.MouseMove,
             }
             and self.service.is_unlocked()
+            and self.profile_settings.auto_lock_seconds > 0
         ):
             self.idle_timer.start()
         return super().eventFilter(watched, event)
