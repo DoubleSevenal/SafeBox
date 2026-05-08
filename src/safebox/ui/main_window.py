@@ -806,7 +806,13 @@ class MainWindow(QMainWindow):
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setObjectName("PageScroll")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(14)
         title = QLabel("设置")
@@ -911,6 +917,8 @@ class MainWindow(QMainWindow):
         self.auto_lock_combo.currentTextChanged.connect(self._set_auto_lock_mode)
         self.custom_auto_lock_minutes.valueChanged.connect(self._set_custom_auto_lock_minutes)
         change_password.clicked.connect(self._change_master_password)
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
         return page
 
     def _build_download_history_page(self) -> QWidget:

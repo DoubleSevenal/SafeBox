@@ -184,6 +184,13 @@ QScrollArea#AttachmentScroll {
 QScrollArea#AttachmentScroll QWidget {
     background: transparent;
 }
+QScrollArea#PageScroll {
+    border: 0;
+    background: transparent;
+}
+QScrollArea#PageScroll QWidget {
+    background: transparent;
+}
 QLabel#SettingsLabel {
     color: #475569;
     background: transparent;
