@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 
 from safebox.core.services import VaultService
 from safebox.core.transfer import TransferMessageKind, TransferMessageSender
-from safebox.net.transfer_server import TransferHttpServer
+from safebox.net.transfer_server import TransferHttpServer, lan_ip_address
 
 
 def _request_json(url: str, payload: dict[str, str]) -> dict:
@@ -59,6 +59,49 @@ def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     assert "上传附件" in html
     assert session["conversation_id"] == server.conversation_id
     assert session["device_name"] == "手机浏览器"
+
+
+def test_transfer_server_exposes_display_url_with_lan_ip(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, lan_ip_provider=lambda: "192.168.1.8")
+
+    server.start()
+    try:
+        display_url = server.display_url
+    finally:
+        server.stop()
+
+    assert display_url.startswith("http://192.168.1.8:")
+    assert display_url != server.url
+
+
+def test_transfer_server_display_url_falls_back_to_local_url(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, lan_ip_provider=lambda: "")
+
+    server.start()
+    try:
+        assert server.display_url == server.url
+    finally:
+        server.stop()
+
+
+def test_lan_ip_address_returns_empty_when_probe_fails(monkeypatch) -> None:
+    class BrokenSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def connect(self, address) -> None:
+            raise OSError("offline")
+
+    monkeypatch.setattr("safebox.net.transfer_server.socket.socket", lambda *args: BrokenSocket())
+
+    assert lan_ip_address() == ""
 
 
 def test_transfer_server_accepts_phone_text_message(vault_path) -> None:

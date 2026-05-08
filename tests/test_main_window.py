@@ -356,6 +356,7 @@ def test_connect_phone_starts_current_transfer_chat(
     assert window.transfer_messages_view.toPlainText() == ""
     assert window.transfer_server is not None
     assert window.transfer_server.url.startswith("http://")
+    assert window.transfer_server.display_url in window.transfer_status.text()
 
     window.transfer_server.stop()
     window.close()

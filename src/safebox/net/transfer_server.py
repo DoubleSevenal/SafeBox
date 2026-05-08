@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from email.parser import BytesParser
 from email.policy import default
 from http import HTTPStatus
@@ -11,6 +12,16 @@ from typing import Any
 
 from safebox.core.services import VaultService
 from safebox.core.transfer import TransferMessageKind, TransferMessageSender
+
+
+def lan_ip_address() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            return probe.getsockname()[0]
+    except OSError:
+        return ""
+
 
 MOBILE_PAGE = """<!doctype html>
 <html lang="zh-CN">
@@ -98,14 +109,16 @@ class TransferHttpServer:
         self,
         service: VaultService,
         *,
-        host: str = "127.0.0.1",
+        host: str = "0.0.0.0",
         port: int = 0,
         device_name: str = "手机浏览器",
+        lan_ip_provider=lan_ip_address,
     ) -> None:
         self.service = service
         self.host = host
         self.port = port
         self.device_name = device_name
+        self.lan_ip_provider = lan_ip_provider
         self.conversation_id = ""
         self.upload_dir = service.store.path.parent / "attachments"
         self._server: ThreadingHTTPServer | None = None
@@ -116,7 +129,19 @@ class TransferHttpServer:
         if self._server is None:
             return ""
         host, port = self._server.server_address
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
         return f"http://{host}:{port}"
+
+    @property
+    def display_url(self) -> str:
+        if self._server is None:
+            return ""
+        lan_ip = self.lan_ip_provider()
+        if not lan_ip:
+            return self.url
+        _, port = self._server.server_address
+        return f"http://{lan_ip}:{port}"
 
     def start(self) -> None:
         if self._server is not None:
