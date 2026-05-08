@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from typing import Any
+from urllib.parse import quote, unquote
 
 from safebox.core.services import VaultService
 from safebox.core.transfer import (
@@ -35,55 +36,102 @@ MOBILE_PAGE = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>传输助手</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-      background: #f3f6fb;
-      color: #172033;
+      background: #e9edf3;
+      color: #182033;
     }
-    main { max-width: 720px; margin: 0 auto; padding: 24px; }
-    h1 { font-size: 28px; margin: 0 0 16px; }
-    .tools { margin-top: 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .messages { margin-top: 18px; display: grid; gap: 10px; }
-    .message {
-      padding: 10px 12px;
-      border: 1px solid #d4deeb;
-      border-radius: 12px;
+    main { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
       background: #ffffff;
+      border-bottom: 1px solid #d8dee9;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    h1 { flex: 1; font-size: 18px; margin: 0; font-weight: 700; }
+    .messages {
+      padding: 16px 12px 120px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: auto;
+    }
+    .message-row { display: flex; }
+    .message-row.desktop { justify-content: flex-start; }
+    .message-row.phone { justify-content: flex-end; }
+    .bubble {
+      max-width: 78%;
+      padding: 9px 11px;
+      border-radius: 8px;
       white-space: pre-wrap;
       word-break: break-word;
+      font-size: 16px;
+      line-height: 1.45;
     }
-    .message.desktop { border-color: #bfdbfe; background: #eff6ff; }
-    .message.phone { border-color: #d1fae5; background: #f0fdf4; }
-    .meta { margin-bottom: 4px; color: #64748b; font-size: 13px; }
-    .message button {
-      min-height: 32px;
+    .desktop .bubble { background: #ffffff; }
+    .phone .bubble { background: #95ec69; }
+    .meta { margin-bottom: 4px; color: #738094; font-size: 12px; }
+    .file-card {
+      display: block;
+      min-width: 210px;
+      color: inherit;
+      text-decoration: none;
+    }
+    .file-name { font-weight: 700; margin-bottom: 4px; }
+    .file-meta { color: #617086; font-size: 12px; }
+    .bubble button {
+      min-height: 30px;
       margin-top: 8px;
       padding: 0 12px;
-      background: #e2e8f0;
+      border-radius: 8px;
+      border: 1px solid #c9d3df;
+      background: rgba(255,255,255,.75);
       color: #172033;
     }
+    footer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #f7f8fb;
+      border-top: 1px solid #d8dee9;
+      padding: 10px 12px 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .compose { display: flex; gap: 8px; align-items: flex-end; }
     textarea {
-      box-sizing: border-box;
+      flex: 1;
       width: 100%;
-      min-height: 160px;
+      min-height: 44px;
+      max-height: 110px;
       border: 1px solid #d4deeb;
-      border-radius: 14px;
-      padding: 12px;
+      border-radius: 8px;
+      padding: 10px;
       font-size: 16px;
+      resize: vertical;
+      background: #ffffff;
     }
     button {
-      margin-top: 12px;
       min-height: 42px;
-      padding: 0 18px;
+      padding: 0 14px;
       border: 0;
-      border-radius: 12px;
-      background: #2563eb;
+      border-radius: 8px;
+      background: #16a34a;
       color: white;
       font-weight: 700;
     }
+    button.secondary { background: #e2e8f0; color: #172033; }
+    button.danger { background: #dc2626; }
     .pair {
-      margin: 0 0 16px;
+      margin: 12px;
       padding: 14px;
       border: 1px solid #d4deeb;
       border-radius: 14px;
@@ -91,7 +139,6 @@ MOBILE_PAGE = """<!doctype html>
     }
     .hidden { display: none; }
     input[type="text"] {
-      box-sizing: border-box;
       width: 160px;
       min-height: 42px;
       border: 1px solid #d4deeb;
@@ -99,28 +146,44 @@ MOBILE_PAGE = """<!doctype html>
       padding: 0 12px;
       font-size: 16px;
     }
-    #status { margin-top: 12px; color: #475569; }
+    .tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .file-label {
+      min-height: 42px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #e2e8f0;
+      color: #172033;
+      font-weight: 700;
+    }
+    .file-label input { display: none; }
+    #status { color: #475569; font-size: 13px; min-height: 18px; }
   </style>
 </head>
 <body>
   <main>
-    <h1>传输助手</h1>
+    <header>
+      <h1>传输助手</h1>
+      <button class="danger" onclick="closeConversation()">结束</button>
+    </header>
     <div id="pairBox" class="pair">
       <input id="code" type="text" inputmode="numeric" placeholder="验证码">
       <button onclick="pairDevice()">验证</button>
     </div>
-    <textarea id="text" placeholder="输入要发送到电脑的文字"></textarea>
-    <button onclick="sendText()">发送</button>
-    <div class="tools">
-      <label>
-        选择文件
-        <input id="file" type="file">
-      </label>
-      <button onclick="uploadFile()">上传附件</button>
-      <button onclick="closeConversation()">结束会话</button>
-    </div>
     <div id="messages" class="messages"></div>
-    <div id="status"></div>
+    <footer>
+      <div class="compose">
+        <textarea id="text" placeholder="输入要发送到电脑的文字"></textarea>
+        <button onclick="sendText()">发送</button>
+      </div>
+      <div class="tools">
+        <label class="file-label">
+          选择文件
+          <input id="file" type="file" onchange="uploadFile()">
+        </label>
+        <button class="secondary" onclick="uploadFile()">上传附件</button>
+        <div id="status"></div>
+      </div>
+    </footer>
   </main>
   <script>
     let paired = false;
@@ -143,7 +206,7 @@ MOBILE_PAGE = """<!doctype html>
       if (!response.ok) return;
       const session = await response.json();
       setPaired(session.paired);
-      setWritable(session.status !== 'closed');
+      setWritable(session.paired && session.status !== 'closed');
       if (paired) loadMessages();
     }
 
@@ -157,6 +220,7 @@ MOBILE_PAGE = """<!doctype html>
       document.getElementById('status').textContent = response.ok ? '验证成功' : '验证码错误';
       if (response.ok) {
         setPaired(true);
+        setWritable(true);
         loadMessages();
       }
     }
@@ -216,25 +280,47 @@ MOBILE_PAGE = """<!doctype html>
       messages.innerHTML = '';
       for (const item of payload.messages) {
         const row = document.createElement('div');
-        row.className = 'message ' + item.sender;
+        row.className = 'message-row ' + item.sender;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
         const meta = document.createElement('div');
         meta.className = 'meta';
         meta.textContent = (item.sender === 'desktop' ? '电脑' : '手机') +
           (item.edited_at ? ' · 已编辑' : '');
-        const body = document.createElement('div');
-        body.textContent = item.text || item.filename || '[附件]';
-        row.appendChild(meta);
-        row.appendChild(body);
+        bubble.appendChild(meta);
+        if (item.kind === 'text') {
+          const body = document.createElement('div');
+          body.textContent = item.text;
+          bubble.appendChild(body);
+        } else {
+          const link = document.createElement('a');
+          link.className = 'file-card';
+          link.href = '/api/attachments/' + encodeURIComponent(item.attachment_id);
+          link.target = '_blank';
+          link.download = item.filename || 'attachment';
+          const name = document.createElement('div');
+          name.className = 'file-name';
+          name.textContent = item.kind === 'image' ? '图片 · ' + item.filename : item.filename;
+          const fileMeta = document.createElement('div');
+          fileMeta.className = 'file-meta';
+          fileMeta.textContent = '点击下载附件';
+          link.appendChild(name);
+          link.appendChild(fileMeta);
+          bubble.appendChild(link);
+        }
         if (item.kind === 'text') {
           const edit = document.createElement('button');
           edit.textContent = '编辑';
           edit.onclick = () => editMessage(item.id, item.text);
-          row.appendChild(edit);
+          bubble.appendChild(edit);
         }
+        row.appendChild(bubble);
         messages.appendChild(row);
       }
+      messages.scrollTop = messages.scrollHeight;
     }
     initSession();
+    setWritable(false);
     setInterval(loadMessages, 1500);
   </script>
 </body>
@@ -332,6 +418,10 @@ class TransferHttpServer:
                 if self.path == "/api/messages":
                     self._handle_messages_get()
                     return
+                attachment_id = _attachment_id_from_path(self.path)
+                if attachment_id:
+                    self._handle_attachment_get(attachment_id)
+                    return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self) -> None:
@@ -386,12 +476,48 @@ class TransferHttpServer:
                             "text": message.text,
                             "attachment_id": message.attachment_id,
                             "filename": attachment.filename if attachment else "",
+                            "mime_type": attachment.mime_type if attachment else "",
+                            "size_bytes": attachment.size_bytes if attachment else 0,
                             "created_at": message.created_at,
                             "updated_at": message.updated_at,
                             "edited_at": message.edited_at,
                         }
                     )
                 self._send_json(HTTPStatus.OK, {"ok": True, "messages": messages})
+
+            def _handle_attachment_get(self, attachment_id: str) -> None:
+                if not owner.paired:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "pair_required"})
+                    return
+                attachment = next(
+                    (
+                        item
+                        for item in owner.service.list_transfer_attachments(
+                            owner.conversation_id
+                        )
+                        if item.id == attachment_id
+                    ),
+                    None,
+                )
+                if attachment is None:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "attachment_not_found"})
+                    return
+                source = Path(attachment.storage_path)
+                if not source.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "file_not_found"})
+                    return
+                body = source.read_bytes()
+                content_type = attachment.mime_type or "application/octet-stream"
+                encoded_filename = quote(attachment.filename)
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename*=UTF-8''{encoded_filename}",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
 
             def _handle_close_post(self) -> None:
                 if not owner.paired:
@@ -557,8 +683,16 @@ def _message_id_from_path(path: str) -> str:
     prefix = "/api/messages/"
     if not path.startswith(prefix):
         return ""
-    message_id = path[len(prefix) :].strip()
+    message_id = unquote(path[len(prefix) :].strip())
     return message_id if message_id and "/" not in message_id else ""
+
+
+def _attachment_id_from_path(path: str) -> str:
+    prefix = "/api/attachments/"
+    if not path.startswith(prefix):
+        return ""
+    attachment_id = unquote(path[len(prefix) :].strip())
+    return attachment_id if attachment_id and "/" not in attachment_id else ""
 
 
 def _unique_path(path: Path) -> Path:
