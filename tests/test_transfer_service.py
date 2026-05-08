@@ -609,6 +609,30 @@ def test_exported_session_note_keeps_appending_until_conversation_closes(
     assert closed.note_sync_active is False
 
 
+def test_exported_session_note_updates_when_message_is_edited(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    conversation = service.create_transfer_conversation(
+        title="手机对话",
+        device_name="安卓手机",
+    )
+    message = service.add_transfer_text_message(
+        conversation.id,
+        sender=TransferMessageSender.DESKTOP,
+        text="旧内容",
+    )
+    note = service.export_transfer_conversation_to_note(conversation.id)
+
+    service.edit_transfer_text_message(conversation.id, message.id, text="新内容")
+
+    updated_note = service.get_record(note.id)
+
+    assert "新内容" in updated_note.note
+    assert "旧内容" not in updated_note.note
+    assert updated_note.category == "会话"
+
+
 def test_exported_session_note_stays_bound_after_conversation_closes(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")

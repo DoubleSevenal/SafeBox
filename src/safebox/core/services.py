@@ -408,6 +408,8 @@ class VaultService:
         message.updated_at = now
         conversation.updated_at = now
         self._save_transfer_message(message)
+        if conversation.note_sync_active and conversation.note_id:
+            self._refresh_transfer_note(conversation)
         self._save_transfer_conversation(conversation)
         return message
 
@@ -541,6 +543,15 @@ class VaultService:
         note.category = "会话"
         self._save(note)
         conversation.note_last_appended_message_id = messages[-1].id
+
+    def _refresh_transfer_note(self, conversation: TransferConversation) -> None:
+        note = self.get_record(conversation.note_id)
+        messages = self.list_transfer_messages(conversation.id)
+        note.note = self._format_transfer_note(messages)
+        note.updated_at = _now()
+        note.category = "会话"
+        self._save(note)
+        conversation.note_last_appended_message_id = messages[-1].id if messages else ""
 
     def _format_transfer_note(self, messages: list[TransferMessage]) -> str:
         blocks: list[str] = []
