@@ -275,6 +275,7 @@ def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
             "filename": "",
             "created_at": desktop_message.created_at,
             "updated_at": desktop_message.updated_at,
+            "edited_at": "",
         }
     ]
 

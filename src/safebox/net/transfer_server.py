@@ -210,7 +210,8 @@ MOBILE_PAGE = """<!doctype html>
         row.className = 'message ' + item.sender;
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = item.sender === 'desktop' ? '电脑' : '手机';
+        meta.textContent = (item.sender === 'desktop' ? '电脑' : '手机') +
+          (item.edited_at ? ' · 已编辑' : '');
         const body = document.createElement('div');
         body.textContent = item.text || item.filename || '[附件]';
         row.appendChild(meta);
@@ -374,6 +375,7 @@ class TransferHttpServer:
                             "filename": attachment.filename if attachment else "",
                             "created_at": message.created_at,
                             "updated_at": message.updated_at,
+                            "edited_at": message.edited_at,
                         }
                     )
                 self._send_json(HTTPStatus.OK, {"ok": True, "messages": messages})

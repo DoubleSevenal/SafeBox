@@ -1318,11 +1318,12 @@ class MainWindow(QMainWindow):
         lines: list[str] = []
         for message in self.service.list_transfer_messages(conversation_id):
             sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            edited_label = " · 已编辑" if message.edited_at else ""
             content = message.text or self._transfer_message_attachment_label(
                 conversation_id,
                 message.attachment_id,
             )
-            lines.append(f"{sender} {message.created_at}\n{content}")
+            lines.append(f"{sender} {message.created_at}{edited_label}\n{content}")
         return "\n\n".join(lines)
 
     def _show_current_transfer_attachments(self) -> None:

@@ -436,6 +436,7 @@ def test_transfer_chat_edits_last_text_message(
     assert len(messages) == 1
     assert messages[0].text == "新内容"
     assert messages[0].edited_at
+    assert "已编辑" in window.transfer_messages_view.toPlainText()
     assert "新内容" in window.transfer_messages_view.toPlainText()
     assert "旧内容" not in window.transfer_messages_view.toPlainText()
     assert window.transfer_message_input.toPlainText() == ""
