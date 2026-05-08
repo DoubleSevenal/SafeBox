@@ -1,5 +1,7 @@
+import json
 from dataclasses import replace
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from PySide6.QtGui import QColor, QPixmap
 
@@ -352,7 +354,10 @@ def test_connect_phone_starts_current_transfer_chat(
     assert window.current_transfer_id
     assert window.transfer_chat_title.text() == "手机对话"
     assert window.transfer_messages_view.toPlainText() == ""
+    assert window.transfer_server is not None
+    assert window.transfer_server.url.startswith("http://")
 
+    window.transfer_server.stop()
     window.close()
 
 
@@ -393,6 +398,42 @@ def test_transfer_chat_sends_text_and_closes_to_history(
     assert "电脑发来的资料说明" in window.transfer_detail_body.toPlainText()
     assert "只读查看" in window.transfer_detail_notice.text()
 
+    window.close()
+
+
+def test_transfer_server_phone_message_appears_in_current_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+
+    request = Request(
+        f"{window.transfer_server.url}/api/messages",
+        data=json.dumps({"text": "手机同步过来的消息"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5):
+        pass
+
+    window._show_transfer_chat(window.current_transfer_id)
+
+    assert "手机" in window.transfer_messages_view.toPlainText()
+    assert "手机同步过来的消息" in window.transfer_messages_view.toPlainText()
+
+    window.transfer_server.stop()
     window.close()
 
 

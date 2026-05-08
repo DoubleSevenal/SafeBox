@@ -51,6 +51,7 @@ from safebox.core.vault_profiles import (
     save_profile_settings,
     sync_vault_to_backup,
 )
+from safebox.net.transfer_server import TransferHttpServer
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
 from safebox.ui.clipboard import SecureClipboard
 from safebox.ui.dialogs import (
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
         self.current_account_id = ""
         self.current_note_id = ""
         self.current_transfer_id = ""
+        self.transfer_server: TransferHttpServer | None = None
         self.account_editing = False
         self.note_editing = False
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
@@ -1195,11 +1197,13 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentWidget(self.transfer_detail_page)
 
     def _show_connect_phone_placeholder(self) -> None:
-        conversation = self.service.create_transfer_conversation(
-            title="手机对话",
-            device_name="手机浏览器",
-        )
-        self._show_transfer_chat(conversation.id)
+        if self.transfer_server is not None:
+            self.transfer_server.stop()
+        self.transfer_server = TransferHttpServer(self.service)
+        self.transfer_server.start()
+        self.transfer_status.setText(f"手机访问地址：{self.transfer_server.url}")
+        self.transfer_status.setVisible(True)
+        self._show_transfer_chat(self.transfer_server.conversation_id)
 
     def _show_transfer_chat(self, conversation_id: str) -> None:
         self.current_transfer_id = conversation_id
@@ -1876,6 +1880,7 @@ class MainWindow(QMainWindow):
 
     def _lock(self) -> None:
         self._auto_sync_current_vault()
+        self._stop_transfer_server()
         self.idle_timer.stop()
         self.service.lock()
         self.account_list.clear()
@@ -1889,7 +1894,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._auto_sync_current_vault()
+        self._stop_transfer_server()
         super().closeEvent(event)
+
+    def _stop_transfer_server(self) -> None:
+        if self.transfer_server is None:
+            return
+        self.transfer_server.stop()
+        self.transfer_server = None
 
     def eventFilter(self, watched, event) -> bool:
         if (
