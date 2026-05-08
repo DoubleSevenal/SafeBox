@@ -40,6 +40,18 @@ MOBILE_PAGE = """<!doctype html>
     main { max-width: 720px; margin: 0 auto; padding: 24px; }
     h1 { font-size: 28px; margin: 0 0 16px; }
     .tools { margin-top: 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .messages { margin-top: 18px; display: grid; gap: 10px; }
+    .message {
+      padding: 10px 12px;
+      border: 1px solid #d4deeb;
+      border-radius: 12px;
+      background: #ffffff;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .message.desktop { border-color: #bfdbfe; background: #eff6ff; }
+    .message.phone { border-color: #d1fae5; background: #f0fdf4; }
+    .meta { margin-bottom: 4px; color: #64748b; font-size: 13px; }
     textarea {
       box-sizing: border-box;
       width: 100%;
@@ -94,6 +106,7 @@ MOBILE_PAGE = """<!doctype html>
       </label>
       <button onclick="uploadFile()">上传附件</button>
     </div>
+    <div id="messages" class="messages"></div>
     <div id="status"></div>
   </main>
   <script>
@@ -105,6 +118,7 @@ MOBILE_PAGE = """<!doctype html>
         body: JSON.stringify({code})
       });
       document.getElementById('status').textContent = response.ok ? '验证成功' : '验证码错误';
+      if (response.ok) loadMessages();
     }
     async function sendText() {
       const text = document.getElementById('text').value;
@@ -128,6 +142,26 @@ MOBILE_PAGE = """<!doctype html>
       document.getElementById('status').textContent = response.ok ? '已上传' : '上传失败';
       if (response.ok) document.getElementById('file').value = '';
     }
+    async function loadMessages() {
+      const response = await fetch('/api/messages');
+      if (!response.ok) return;
+      const payload = await response.json();
+      const messages = document.getElementById('messages');
+      messages.innerHTML = '';
+      for (const item of payload.messages) {
+        const row = document.createElement('div');
+        row.className = 'message ' + item.sender;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = item.sender === 'desktop' ? '电脑' : '手机';
+        const body = document.createElement('div');
+        body.textContent = item.text || item.filename || '[附件]';
+        row.appendChild(meta);
+        row.appendChild(body);
+        messages.appendChild(row);
+      }
+    }
+    setInterval(loadMessages, 1500);
   </script>
 </body>
 </html>
@@ -217,6 +251,9 @@ class TransferHttpServer:
                         },
                     )
                     return
+                if self.path == "/api/messages":
+                    self._handle_messages_get()
+                    return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self) -> None:
@@ -239,6 +276,33 @@ class TransferHttpServer:
                     return
                 owner.paired = True
                 self._send_json(HTTPStatus.OK, {"ok": True, "paired": True})
+
+            def _handle_messages_get(self) -> None:
+                if not owner.paired:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "pair_required"})
+                    return
+                attachments = {
+                    attachment.id: attachment
+                    for attachment in owner.service.list_transfer_attachments(
+                        owner.conversation_id
+                    )
+                }
+                messages = []
+                for message in owner.service.list_transfer_messages(owner.conversation_id):
+                    attachment = attachments.get(message.attachment_id)
+                    messages.append(
+                        {
+                            "id": message.id,
+                            "sender": message.sender.value,
+                            "kind": message.kind.value,
+                            "text": message.text,
+                            "attachment_id": message.attachment_id,
+                            "filename": attachment.filename if attachment else "",
+                            "created_at": message.created_at,
+                            "updated_at": message.updated_at,
+                        }
+                    )
+                self._send_json(HTTPStatus.OK, {"ok": True, "messages": messages})
 
             def _handle_message_post(self) -> None:
                 if not owner.paired:

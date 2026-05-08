@@ -204,6 +204,58 @@ def test_transfer_server_pairs_with_verification_code(vault_path) -> None:
     assert paired_session["paired"] is True
 
 
+def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        desktop_message = service.add_transfer_text_message(
+            server.conversation_id,
+            sender=TransferMessageSender.DESKTOP,
+            text="电脑发来的消息",
+        )
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        with urlopen(f"{server.url}/api/messages", timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.stop()
+
+    assert payload["ok"] is True
+    assert payload["messages"] == [
+        {
+            "id": desktop_message.id,
+            "sender": "desktop",
+            "kind": "text",
+            "text": "电脑发来的消息",
+            "attachment_id": "",
+            "filename": "",
+            "created_at": desktop_message.created_at,
+            "updated_at": desktop_message.updated_at,
+        }
+    ]
+
+
+def test_transfer_server_rejects_message_list_before_pairing(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        try:
+            urlopen(f"{server.url}/api/messages", timeout=5)
+        except HTTPError as exc:
+            status = exc.code
+        else:
+            status = 200
+    finally:
+        server.stop()
+
+    assert status == 403
+
+
 def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
