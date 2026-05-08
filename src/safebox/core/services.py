@@ -276,7 +276,7 @@ class VaultService:
 
     def close_transfer_conversation(self, conversation_id: str) -> TransferConversation:
         existing = self.get_transfer_conversation(conversation_id)
-        if existing.status == TransferConversationStatus.CLOSED:
+        if existing.status == TransferConversationStatus.CLOSED or existing.closed_at:
             return existing
         now = _now()
         if existing.status != TransferConversationStatus.TRANSFERRED:
@@ -289,7 +289,7 @@ class VaultService:
 
     def delete_transfer_conversation(self, conversation_id: str) -> None:
         existing = self.get_transfer_conversation(conversation_id)
-        if existing.status == TransferConversationStatus.ACTIVE:
+        if _transfer_conversation_is_open(existing):
             raise ValueError("Active transfer conversation cannot be deleted")
         if existing.deleted_at:
             return
@@ -309,7 +309,7 @@ class VaultService:
         if not clean_text:
             raise ValueError("Message text is required")
         conversation = self.get_transfer_conversation(conversation_id)
-        if conversation.status == TransferConversationStatus.CLOSED:
+        if not _transfer_conversation_is_open(conversation):
             raise ValueError("Transfer conversation is closed")
         now = _now()
         message = TransferMessage(
@@ -348,7 +348,7 @@ class VaultService:
         if not clean_filename:
             raise ValueError("Attachment filename is required")
         conversation = self.get_transfer_conversation(conversation_id)
-        if conversation.status == TransferConversationStatus.CLOSED:
+        if not _transfer_conversation_is_open(conversation):
             raise ValueError("Transfer conversation is closed")
         now = _now()
         attachment = TransferAttachment(
@@ -405,7 +405,7 @@ class VaultService:
         if not clean_text:
             raise ValueError("Message text is required")
         conversation = self.get_transfer_conversation(conversation_id)
-        if conversation.status == TransferConversationStatus.CLOSED:
+        if not _transfer_conversation_is_open(conversation):
             raise ValueError("Transfer conversation is closed")
         messages = self.list_transfer_messages(conversation.id)
         message = next((item for item in messages if item.id == message_id), None)
@@ -530,7 +530,7 @@ class VaultService:
                 category="会话",
             )
             conversation.note_id = note.id
-        conversation.note_sync_active = conversation.status != TransferConversationStatus.CLOSED
+        conversation.note_sync_active = _transfer_conversation_is_open(conversation)
         conversation.note_last_appended_message_id = messages[-1].id if messages else ""
         conversation.status = TransferConversationStatus.TRANSFERRED
         conversation.updated_at = _now()
@@ -642,6 +642,14 @@ def _unique_download_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
         index += 1
+
+
+def _transfer_conversation_is_open(conversation: TransferConversation) -> bool:
+    return (
+        conversation.status
+        in {TransferConversationStatus.ACTIVE, TransferConversationStatus.TRANSFERRED}
+        and not conversation.closed_at
+    )
 
 
 def try_unlock(service: VaultService, master_password: str) -> UnlockResult:

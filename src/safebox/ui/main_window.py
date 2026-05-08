@@ -1219,7 +1219,7 @@ class MainWindow(QMainWindow):
                 type=RecordType.SECURE_NOTE,
                 name=conversation.title,
                 account=conversation.device_name,
-                category=_transfer_status_label(conversation.status.value),
+                category=self._transfer_conversation_status_label(conversation),
                 favorite=False,
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
@@ -1233,12 +1233,12 @@ class MainWindow(QMainWindow):
     def _open_transfer_item(self, item: QListWidgetItem) -> None:
         self.current_transfer_id = item.data(Qt.ItemDataRole.UserRole)
         conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-        if conversation.status == TransferConversationStatus.ACTIVE:
+        if self._transfer_conversation_is_open(conversation):
             self._show_transfer_chat(conversation.id)
             return
         self.transfer_detail_title.setText(conversation.title)
         self.transfer_detail_meta.setText(
-            f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)}"
+            f"{conversation.device_name} · {self._transfer_conversation_status_label(conversation)}"
         )
         self.transfer_detail_body.setPlainText(self._format_transfer_messages(conversation.id))
         self._remember_module_page("transfer", self.transfer_detail_page)
@@ -1246,17 +1246,19 @@ class MainWindow(QMainWindow):
 
     def _show_connect_phone_placeholder(self) -> None:
         if self.transfer_server is not None:
-            self.transfer_server.stop()
+            self._stop_transfer_server(close_conversation=True)
         self.transfer_server = TransferHttpServer(self.service)
         self.transfer_server.start()
         self.transfer_status.setText(
             f"手机访问地址：{self.transfer_server.display_url}\n"
-            f"验证码：{self.transfer_server.verification_code}"
+            f"验证码：{self.transfer_server.verification_code}\n"
+            "等待手机验证后即可互发文字、图片和文件。"
         )
         self.transfer_status.setVisible(True)
         self.transfer_chat_connection.setText(
             f"手机访问：{self.transfer_server.display_url}\n"
-            f"验证码：{self.transfer_server.verification_code}"
+            f"验证码：{self.transfer_server.verification_code}\n"
+            "等待手机验证后即可开始传输。"
         )
         self.transfer_chat_connection.setVisible(True)
         self.transfer_copy_link_button.setVisible(True)
@@ -1265,13 +1267,15 @@ class MainWindow(QMainWindow):
     def _show_transfer_chat(self, conversation_id: str) -> None:
         self.current_transfer_id = conversation_id
         conversation = self.service.get_transfer_conversation(conversation_id)
-        writable = conversation.status != TransferConversationStatus.CLOSED
+        writable = self._transfer_conversation_is_open(conversation)
         self.transfer_chat_title.setText(conversation.title)
         self.transfer_chat_meta.setText(self._transfer_chat_meta(conversation.id))
         if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
             self.transfer_chat_connection.setText("")
             self.transfer_chat_connection.setVisible(False)
             self.transfer_copy_link_button.setVisible(False)
+        else:
+            self._refresh_transfer_connection_status(conversation)
         self._render_transfer_messages(conversation_id)
         self.transfer_message_input.setEnabled(writable)
         self.transfer_send_button.setEnabled(writable)
@@ -1294,11 +1298,12 @@ class MainWindow(QMainWindow):
             return
         try:
             conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-            if conversation.status == TransferConversationStatus.CLOSED:
+            if not self._transfer_conversation_is_open(conversation):
                 self.transfer_refresh_timer.stop()
-                self._show_transfer_list_page()
+                self._show_transfer_chat(conversation.id)
                 return
             self.transfer_chat_meta.setText(self._transfer_chat_meta(self.current_transfer_id))
+            self._refresh_transfer_connection_status(conversation)
             self._render_transfer_messages(self.current_transfer_id)
         except KeyError:
             self.transfer_refresh_timer.stop()
@@ -1307,7 +1312,7 @@ class MainWindow(QMainWindow):
         if not self.current_transfer_id:
             return
         conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-        if conversation.status == TransferConversationStatus.CLOSED:
+        if not self._transfer_conversation_is_open(conversation):
             return
         text = self.transfer_message_input.toPlainText().strip()
         if not text:
@@ -1328,7 +1333,7 @@ class MainWindow(QMainWindow):
         if not self.current_transfer_id:
             return
         conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-        if conversation.status == TransferConversationStatus.CLOSED:
+        if not self._transfer_conversation_is_open(conversation):
             return
         filename, _ = QFileDialog.getOpenFileName(self, "选择要发送的文件")
         if not filename:
@@ -1363,7 +1368,7 @@ class MainWindow(QMainWindow):
         if not self.current_transfer_id:
             return
         conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-        if conversation.status == TransferConversationStatus.CLOSED:
+        if not self._transfer_conversation_is_open(conversation):
             return
         text = self.transfer_message_input.toPlainText().strip()
         if not text:
@@ -1410,12 +1415,46 @@ class MainWindow(QMainWindow):
     def _copy_transfer_link(self) -> None:
         if self.transfer_server is None:
             return
-        self.clipboard.copy(self.transfer_server.display_url)
+        self.clipboard.copy(
+            f"{self.transfer_server.display_url}\n验证码："
+            f"{self.transfer_server.verification_code}"
+        )
         self.transfer_chat_connection.setText(
             f"手机访问：{self.transfer_server.display_url}\n"
             f"验证码：{self.transfer_server.verification_code}\n"
-            "链接已复制"
+            "链接已复制，验证码请手动输入到手机页面。"
         )
+
+    def _refresh_transfer_connection_status(self, conversation) -> None:
+        if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
+            return
+        pair_status = "手机已验证连接" if self.transfer_server.paired else "等待手机验证"
+        self.transfer_chat_connection.setText(
+            f"手机访问：{self.transfer_server.display_url}\n"
+            f"验证码：{self.transfer_server.verification_code}\n"
+            f"{pair_status}。{self._transfer_chat_hint(conversation)}"
+        )
+        self.transfer_chat_connection.setVisible(True)
+        self.transfer_copy_link_button.setVisible(True)
+
+    def _transfer_chat_hint(self, conversation) -> str:
+        if not self._transfer_conversation_is_open(conversation):
+            return "此次对话已关闭，只能查看历史消息"
+        if conversation.note_id:
+            return "已转存为小纸条，新消息会继续同步到该小纸条"
+        return "可互发文字、图片和文件"
+
+    def _transfer_conversation_is_open(self, conversation) -> bool:
+        return (
+            conversation.status
+            in {TransferConversationStatus.ACTIVE, TransferConversationStatus.TRANSFERRED}
+            and not conversation.closed_at
+        )
+
+    def _transfer_conversation_status_label(self, conversation) -> str:
+        if conversation.closed_at:
+            return "已关闭 · 已转存" if conversation.note_id else "已关闭"
+        return _transfer_status_label(conversation.status.value)
 
     def _close_current_transfer_chat(self) -> None:
         if not self.current_transfer_id:
@@ -1428,7 +1467,7 @@ class MainWindow(QMainWindow):
         if not self.current_transfer_id:
             return
         conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-        if conversation.status == TransferConversationStatus.ACTIVE:
+        if self._transfer_conversation_is_open(conversation):
             self.transfer_detail_notice.setText("进行中的对话不能删除，请先关闭此次对话")
             return
         self.service.delete_transfer_conversation(self.current_transfer_id)
@@ -1474,20 +1513,27 @@ class MainWindow(QMainWindow):
             return
         attachments = self.service.list_transfer_attachments(self.current_transfer_id)
         downloaded = 0
+        failed = 0
         for attachment in attachments:
-            self.service.download_transfer_attachment(
-                conversation_id=self.current_transfer_id,
-                attachment_id=attachment.id,
-                download_dir=self.settings.transfer_download_dir,
-            )
-            downloaded += 1
+            try:
+                self.service.download_transfer_attachment(
+                    conversation_id=self.current_transfer_id,
+                    attachment_id=attachment.id,
+                    download_dir=self.settings.transfer_download_dir,
+                )
+                downloaded += 1
+            except FileNotFoundError:
+                failed += 1
         message = f"已下载 {downloaded} 个附件"
+        if failed:
+            message = f"{message}，{failed} 个源文件不存在"
         if self.pages.currentWidget() == self.transfer_chat_page:
             self.transfer_chat_meta.setText(
                 f"{self._transfer_chat_meta(self.current_transfer_id)} · {message}"
             )
         else:
             self.transfer_detail_notice.setText(message)
+        self._refresh_download_history()
 
     def _download_transfer_attachment_by_id(self, attachment_id: str) -> None:
         if not self.current_transfer_id:
@@ -1695,8 +1741,9 @@ class MainWindow(QMainWindow):
 
     def _transfer_chat_meta(self, conversation_id: str) -> str:
         conversation = self.service.get_transfer_conversation(conversation_id)
+        status_label = self._transfer_conversation_status_label(conversation)
         meta = (
-            f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)} · "
+            f"{conversation.device_name} · {status_label} · "
             f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
         )
         if conversation.note_id:
@@ -2265,7 +2312,7 @@ class MainWindow(QMainWindow):
     def _lock(self) -> None:
         self._auto_sync_current_vault()
         self.transfer_refresh_timer.stop()
-        self._stop_transfer_server()
+        self._stop_transfer_server(close_conversation=True)
         self.idle_timer.stop()
         self.service.lock()
         self.account_list.clear()
@@ -2279,13 +2326,19 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._auto_sync_current_vault()
-        self._stop_transfer_server()
+        self._stop_transfer_server(close_conversation=True)
         super().closeEvent(event)
 
-    def _stop_transfer_server(self) -> None:
+    def _stop_transfer_server(self, *, close_conversation: bool = False) -> None:
         if self.transfer_server is None:
             return
+        conversation_id = self.transfer_server.conversation_id
         self.transfer_server.stop()
+        if close_conversation and conversation_id and self.service.is_unlocked():
+            try:
+                self.service.close_transfer_conversation(conversation_id)
+            except KeyError:
+                pass
         self.transfer_server = None
 
     def eventFilter(self, watched, event) -> bool:

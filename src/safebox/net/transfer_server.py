@@ -56,6 +56,11 @@ MOBILE_PAGE = """<!doctype html>
       gap: 12px;
     }
     h1 { flex: 1; font-size: 18px; margin: 0; font-weight: 700; }
+    .session-state {
+      font-size: 13px;
+      color: #64748b;
+      white-space: nowrap;
+    }
     .messages {
       padding: 16px 12px 120px;
       display: flex;
@@ -138,6 +143,14 @@ MOBILE_PAGE = """<!doctype html>
       background: #ffffff;
     }
     .hidden { display: none; }
+    .readonly {
+      margin: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      background: #fff7ed;
+      color: #9a3412;
+      border: 1px solid #fed7aa;
+    }
     input[type="text"] {
       width: 160px;
       min-height: 42px;
@@ -163,11 +176,15 @@ MOBILE_PAGE = """<!doctype html>
   <main>
     <header>
       <h1>传输助手</h1>
+      <div id="sessionState" class="session-state">待验证</div>
       <button class="danger" onclick="closeConversation()">结束</button>
     </header>
     <div id="pairBox" class="pair">
       <input id="code" type="text" inputmode="numeric" placeholder="验证码">
       <button onclick="pairDevice()">验证</button>
+    </div>
+    <div id="readonlyNotice" class="readonly hidden">
+      此次对话已结束，只能查看历史消息和下载附件。
     </div>
     <div id="messages" class="messages"></div>
     <footer>
@@ -201,12 +218,33 @@ MOBILE_PAGE = """<!doctype html>
       }
     }
 
+    function setSessionState(session) {
+      const state = document.getElementById('sessionState');
+      const closed = session.status === 'closed' || session.closed_at;
+      state.textContent = closed ? '已结束' : (session.paired ? '已连接' : '待验证');
+      document.getElementById('readonlyNotice').className = closed ? 'readonly' : 'readonly hidden';
+    }
+
+    function statusText(payload, fallback) {
+      if (!payload || !payload.error) return fallback;
+      const errors = {
+        pair_required: '请先输入验证码',
+        invalid_code: '验证码错误',
+        text_required: '请输入内容',
+        multipart_required: '上传格式不正确',
+        file_required: '请选择文件',
+        closed: '此次对话已结束'
+      };
+      return errors[payload.error] || payload.error || fallback;
+    }
+
     async function initSession() {
       const response = await fetch('/api/session');
       if (!response.ok) return;
       const session = await response.json();
       setPaired(session.paired);
-      setWritable(session.paired && session.status !== 'closed');
+      setSessionState(session);
+      setWritable(session.paired && session.status !== 'closed' && !session.closed_at);
       if (paired) loadMessages();
     }
 
@@ -217,10 +255,14 @@ MOBILE_PAGE = """<!doctype html>
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({code})
       });
-      document.getElementById('status').textContent = response.ok ? '验证成功' : '验证码错误';
+      const payload = await response.json().catch(() => ({}));
+      document.getElementById('status').textContent = response.ok
+        ? '验证成功'
+        : statusText(payload, '验证码错误');
       if (response.ok) {
         setPaired(true);
         setWritable(true);
+        initSession();
         loadMessages();
       }
     }
@@ -230,12 +272,19 @@ MOBILE_PAGE = """<!doctype html>
     }
     async function sendText() {
       const text = document.getElementById('text').value;
+      if (!text.trim()) {
+        document.getElementById('status').textContent = '请输入内容';
+        return;
+      }
       const response = await fetch('/api/messages', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({text})
       });
-      document.getElementById('status').textContent = response.ok ? '已发送' : '发送失败';
+      const payload = await response.json().catch(() => ({}));
+      document.getElementById('status').textContent = response.ok
+        ? '已发送'
+        : statusText(payload, '发送失败');
       if (response.ok) {
         document.getElementById('text').value = '';
         refreshAfterWrite();
@@ -250,7 +299,10 @@ MOBILE_PAGE = """<!doctype html>
       const data = new FormData();
       data.append('file', file);
       const response = await fetch('/api/uploads', { method: 'POST', body: data });
-      document.getElementById('status').textContent = response.ok ? '已上传' : '上传失败';
+      const payload = await response.json().catch(() => ({}));
+      document.getElementById('status').textContent = response.ok
+        ? '已上传'
+        : statusText(payload, '上传失败');
       if (response.ok) {
         document.getElementById('file').value = '';
         refreshAfterWrite();
@@ -258,7 +310,10 @@ MOBILE_PAGE = """<!doctype html>
     }
     async function closeConversation() {
       const response = await fetch('/api/close', { method: 'POST' });
-      document.getElementById('status').textContent = response.ok ? '会话已结束' : '结束失败';
+      const payload = await response.json().catch(() => ({}));
+      document.getElementById('status').textContent = response.ok
+        ? '会话已结束'
+        : statusText(payload, '结束失败');
       if (response.ok) refreshAfterWrite();
     }
     async function editMessage(id, currentText) {
@@ -269,7 +324,10 @@ MOBILE_PAGE = """<!doctype html>
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({text})
       });
-      document.getElementById('status').textContent = response.ok ? '已编辑' : '编辑失败';
+      const payload = await response.json().catch(() => ({}));
+      document.getElementById('status').textContent = response.ok
+        ? '已编辑'
+        : statusText(payload, '编辑失败');
       if (response.ok) loadMessages();
     }
     async function loadMessages() {
@@ -321,6 +379,7 @@ MOBILE_PAGE = """<!doctype html>
     }
     initSession();
     setWritable(false);
+    setInterval(initSession, 1500);
     setInterval(loadMessages, 1500);
   </script>
 </body>
@@ -412,6 +471,7 @@ class TransferHttpServer:
                             "device_name": owner.device_name,
                             "paired": owner.paired,
                             "status": conversation.status.value,
+                            "closed_at": conversation.closed_at,
                         },
                     )
                     return
@@ -528,7 +588,11 @@ class TransferHttpServer:
                 )
                 self._send_json(
                     HTTPStatus.OK,
-                    {"ok": True, "status": conversation.status.value},
+                    {
+                        "ok": True,
+                        "status": conversation.status.value,
+                        "closed_at": conversation.closed_at,
+                    },
                 )
 
             def _handle_message_post(self) -> None:
@@ -547,7 +611,14 @@ class TransferHttpServer:
                         text=text,
                     )
                 except ValueError as exc:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    self._send_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "error": "closed"
+                            if str(exc) == "Transfer conversation is closed"
+                            else str(exc)
+                        },
+                    )
                     return
                 self._send_json(HTTPStatus.OK, {"ok": True, "message_id": message.id})
 
@@ -567,7 +638,14 @@ class TransferHttpServer:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "message_not_found"})
                     return
                 except ValueError as exc:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    self._send_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "error": "closed"
+                            if str(exc) == "Transfer conversation is closed"
+                            else str(exc)
+                        },
+                    )
                     return
                 self._send_json(HTTPStatus.OK, {"ok": True, "message_id": message.id})
 
@@ -589,10 +667,17 @@ class TransferHttpServer:
                 conversation = owner.service.get_transfer_conversation(
                     owner.conversation_id
                 )
-                if conversation.status != TransferConversationStatus.ACTIVE:
+                if (
+                    conversation.status
+                    not in {
+                        TransferConversationStatus.ACTIVE,
+                        TransferConversationStatus.TRANSFERRED,
+                    }
+                    or conversation.closed_at
+                ):
                     self._send_json(
                         HTTPStatus.BAD_REQUEST,
-                        {"error": "Transfer conversation is closed"},
+                        {"error": "closed"},
                     )
                     return
                 target_dir = owner.upload_dir / owner.conversation_id
@@ -615,7 +700,14 @@ class TransferHttpServer:
                         storage_path=str(target),
                     )
                 except ValueError as exc:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    self._send_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "error": "closed"
+                            if str(exc) == "Transfer conversation is closed"
+                            else str(exc)
+                        },
+                    )
                     return
                 self._send_json(
                     HTTPStatus.OK,
