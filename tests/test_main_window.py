@@ -437,6 +437,108 @@ def test_transfer_server_phone_message_appears_in_current_chat(
     window.close()
 
 
+def test_active_transfer_chat_refreshes_phone_message_without_reopening(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+
+    window.service.add_transfer_text_message(
+        window.current_transfer_id,
+        sender=TransferMessageSender.PHONE,
+        text="自动刷新消息",
+    )
+
+    assert "自动刷新消息" not in window.transfer_messages_view.toPlainText()
+
+    window._refresh_active_transfer_chat()
+
+    assert "自动刷新消息" in window.transfer_messages_view.toPlainText()
+    assert "消息 1" in window.transfer_chat_meta.text()
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_active_transfer_chat_refreshes_attachment_summary(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+    window.service.add_transfer_attachment_message(
+        window.current_transfer_id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path=str(tmp_path / "invoice.pdf"),
+        sha256="abc123",
+    )
+
+    window._refresh_active_transfer_chat()
+
+    assert "[附件] invoice.pdf" in window.transfer_messages_view.toPlainText()
+    assert "附件 1" in window.transfer_chat_meta.text()
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_transfer_refresh_timer_runs_only_on_active_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    assert not window.transfer_refresh_timer.isActive()
+
+    window.connect_phone_button.click()
+    assert window.transfer_refresh_timer.isActive()
+
+    window._show_transfer_list_page()
+    assert not window.transfer_refresh_timer.isActive()
+
+    window.transfer_server.stop()
+    window.close()
+
+
 def test_sidebar_navigation_preserves_active_transfer_chat(
     vault_path: Path,
     monkeypatch,

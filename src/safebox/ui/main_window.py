@@ -95,6 +95,9 @@ class MainWindow(QMainWindow):
         self.idle_timer = QTimer(self)
         self.idle_timer.setInterval(self.profile_settings.auto_lock_seconds * 1000)
         self.idle_timer.timeout.connect(self._lock)
+        self.transfer_refresh_timer = QTimer(self)
+        self.transfer_refresh_timer.setInterval(1000)
+        self.transfer_refresh_timer.timeout.connect(self._refresh_active_transfer_chat)
         self.setWindowTitle("SafeBox")
         self._build_ui()
         self.installEventFilter(self)
@@ -926,6 +929,7 @@ class MainWindow(QMainWindow):
         self._refresh_transfer_conversations()
 
     def _show_transfer_list_page(self) -> None:
+        self.transfer_refresh_timer.stop()
         self._remember_module_page("transfer", self.transfer_page)
         self._set_nav("transfer")
         self.pages.setCurrentWidget(self.transfer_page)
@@ -1214,6 +1218,23 @@ class MainWindow(QMainWindow):
         self._remember_module_page("transfer", self.transfer_chat_page)
         self._set_nav("transfer")
         self.pages.setCurrentWidget(self.transfer_chat_page)
+        if not self.transfer_refresh_timer.isActive():
+            self.transfer_refresh_timer.start()
+
+    def _refresh_active_transfer_chat(self) -> None:
+        if (
+            not self.current_transfer_id
+            or not self.service.is_unlocked()
+            or self.pages.currentWidget() != self.transfer_chat_page
+        ):
+            return
+        try:
+            self.transfer_chat_meta.setText(self._transfer_chat_meta(self.current_transfer_id))
+            self.transfer_messages_view.setPlainText(
+                self._format_transfer_messages(self.current_transfer_id)
+            )
+        except KeyError:
+            self.transfer_refresh_timer.stop()
 
     def _send_current_transfer_text(self) -> None:
         text = self.transfer_message_input.toPlainText()
@@ -1228,6 +1249,7 @@ class MainWindow(QMainWindow):
     def _close_current_transfer_chat(self) -> None:
         if not self.current_transfer_id:
             return
+        self.transfer_refresh_timer.stop()
         self.service.close_transfer_conversation(self.current_transfer_id)
         self._show_transfer_list_page()
 
@@ -1355,7 +1377,10 @@ class MainWindow(QMainWindow):
 
     def _transfer_chat_meta(self, conversation_id: str) -> str:
         conversation = self.service.get_transfer_conversation(conversation_id)
-        meta = f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)}"
+        meta = (
+            f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)} · "
+            f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
+        )
         if conversation.note_id:
             meta = f"{meta} · 已转存为小纸条"
         return meta
@@ -1880,6 +1905,7 @@ class MainWindow(QMainWindow):
 
     def _lock(self) -> None:
         self._auto_sync_current_vault()
+        self.transfer_refresh_timer.stop()
         self._stop_transfer_server()
         self.idle_timer.stop()
         self.service.lock()
