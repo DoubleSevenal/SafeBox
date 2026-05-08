@@ -1,6 +1,13 @@
+import json
+from dataclasses import replace
 from pathlib import Path
+from urllib.request import Request, urlopen
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPixmap
 
 from safebox.core.services import VaultService
+from safebox.core.transfer import TransferMessageKind, TransferMessageSender
 from safebox.core.vault_profiles import load_profile_settings, vault_path_for_name
 from safebox.ui import main_window
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
@@ -17,6 +24,17 @@ class FakeVaultOpenDialog:
 
     def values(self) -> tuple[str, str, str, str]:
         return ("于祥磊", "wojiao321.", "", "open")
+
+
+def _pair_transfer_phone(window: MainWindow) -> None:
+    window.connect_phone_button.click()
+    assert window.transfer_server is not None
+    with urlopen(
+        f"{window.transfer_server.url}/?token={window.transfer_server.connection_token}",
+        timeout=5,
+    ):
+        pass
+    window._check_transfer_pairing()
 
 
 def test_open_existing_vault_refreshes_account_and_note_lists(
@@ -177,6 +195,873 @@ def test_sidebar_navigation_preserves_note_detail_page(
     window.close()
 
 
+def test_transfer_assistant_page_lists_local_conversations(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_transfer_conversation(
+        title="祥磊的 iPhone 对话",
+        device_name="祥磊的 iPhone",
+    )
+    service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_page
+    assert window.transfer_list.count() == 2
+    assert window.transfer_status.text() == ""
+
+    window.transfer_search.setText("报销")
+
+    assert window.transfer_list.count() == 1
+
+    window.close()
+
+
+def test_transfer_conversation_opens_read_only_detail(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.close_transfer_conversation(conversation.id)
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    assert window.current_transfer_id == conversation.id
+    assert window.pages.currentWidget() == window.transfer_detail_page
+    assert window.transfer_detail_title.text() == "报销资料"
+    assert "安卓手机" in window.transfer_detail_meta.text()
+    assert "只读查看" in window.transfer_detail_notice.text()
+
+    window._show_notes_page()
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_detail_page
+
+    window.close()
+
+
+def test_transfer_detail_shows_attachment_list(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.IMAGE,
+        filename="invoice.jpg",
+        mime_type="image/jpeg",
+        size_bytes=2048,
+        storage_path="attachments/tc/invoice.jpg",
+        sha256="abc123",
+    )
+    service.close_transfer_conversation(conversation.id)
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._show_current_transfer_attachments()
+
+    assert "invoice.jpg" in window.transfer_detail_notice.text()
+    assert "image/jpeg" in window.transfer_detail_notice.text()
+    assert "2.0 KB" in window.transfer_detail_notice.text()
+
+    window.close()
+
+
+def test_transfer_detail_back_resets_transfer_module_to_list(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_transfer_conversation(title="报销资料", device_name="安卓手机")
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    window._open_transfer_item(window.transfer_list.item(0))
+    window._show_transfer_list_page()
+    assert window.pages.currentWidget() == window.transfer_page
+
+    window._show_notes_page()
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_page
+
+    window.close()
+
+
+def test_connect_phone_waits_for_phone_before_creating_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    window.connect_phone_button.click()
+
+    assert window.transfer_server is not None
+    assert window.pages.currentWidget() == window.transfer_connect_page
+    assert window.current_transfer_id == ""
+    assert window.transfer_list.count() == 1
+    assert window.transfer_list.item(0).flags() == Qt.ItemFlag.NoItemFlags
+    assert window.service.list_transfer_conversations() == []
+    assert window.transfer_server.url.startswith("http://")
+    assert window.transfer_server.display_url in window.transfer_connect_url_value.text()
+    assert "等待手机打开链接" in window.transfer_connect_code_value.text()
+
+    with urlopen(
+        f"{window.transfer_server.url}/?token={window.transfer_server.connection_token}",
+        timeout=5,
+    ):
+        pass
+    window._check_transfer_pairing()
+
+    assert window.pages.currentWidget() == window.transfer_chat_page
+    assert window.current_transfer_id
+    assert window.transfer_chat_title.text() == "手机对话"
+    assert window.transfer_messages_view.toPlainText() == ""
+    assert window.transfer_server.conversation_id == window.current_transfer_id
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_transfer_chat_sends_text_and_closes_to_history(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+
+    window.transfer_message_input.setPlainText("电脑发来的资料说明")
+    window.transfer_send_button.click()
+
+    assert "电脑" in window.transfer_messages_view.toPlainText()
+    assert "电脑发来的资料说明" in window.transfer_messages_view.toPlainText()
+    assert window.transfer_message_input.toPlainText() == ""
+
+    window.transfer_close_button.click()
+
+    conversation = window.service.get_transfer_conversation(window.current_transfer_id)
+    assert conversation.message_count == 1
+    assert conversation.status.value == "closed"
+    assert window.pages.currentWidget() == window.transfer_page
+    assert window.transfer_list.count() == 1
+
+    window._open_transfer_item(window.transfer_list.item(0))
+    assert "电脑发来的资料说明" in window.transfer_detail_messages_view.toPlainText()
+    assert "只读查看" in window.transfer_detail_notice.text()
+
+    window.close()
+
+
+def test_transfer_chat_does_not_expose_message_editing(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+    window.transfer_message_input.setPlainText("旧内容")
+    window.transfer_send_button.click()
+
+    messages = window.service.list_transfer_messages(window.current_transfer_id)
+
+    assert len(messages) == 1
+    assert messages[0].text == "旧内容"
+    assert not hasattr(window, "transfer_edit_last_button")
+    assert "编辑消息" not in [
+        window.transfer_send_button.text(),
+        window.transfer_send_file_button.text(),
+    ]
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_transfer_server_phone_message_appears_in_current_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+
+    request = Request(
+        f"{window.transfer_server.url}/api/messages",
+        data=json.dumps({"text": "手机同步过来的消息"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5):
+        pass
+
+    window._show_transfer_chat(window.current_transfer_id)
+
+    assert "手机" in window.transfer_messages_view.toPlainText()
+    assert "手机同步过来的消息" in window.transfer_messages_view.toPlainText()
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_active_transfer_chat_refreshes_phone_message_without_reopening(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+
+    window.service.add_transfer_text_message(
+        window.current_transfer_id,
+        sender=TransferMessageSender.PHONE,
+        text="自动刷新消息",
+    )
+
+    assert "自动刷新消息" not in window.transfer_messages_view.toPlainText()
+
+    window._refresh_active_transfer_chat()
+
+    assert "自动刷新消息" in window.transfer_messages_view.toPlainText()
+    assert "消息 1" in window.transfer_chat_meta.text()
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_active_transfer_chat_returns_to_list_when_phone_closes(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+
+    window.service.close_transfer_conversation(window.current_transfer_id)
+
+    window._refresh_active_transfer_chat()
+
+    assert window.pages.currentWidget() == window.transfer_chat_page
+    assert not window.transfer_refresh_timer.isActive()
+    window._show_transfer_list_page()
+    assert window.transfer_list.count() == 1
+    conversation = window.service.get_transfer_conversation(window.current_transfer_id)
+    assert conversation.status.value == "closed"
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_transfer_chat_disables_input_for_closed_conversation(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+
+    window.service.close_transfer_conversation(window.current_transfer_id)
+    window._show_transfer_chat(window.current_transfer_id)
+
+    assert not window.transfer_message_input.isEnabled()
+    assert not window.transfer_send_button.isEnabled()
+    assert not hasattr(window, "transfer_edit_last_button")
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_active_transfer_chat_refreshes_attachment_summary(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+    window.service.add_transfer_attachment_message(
+        window.current_transfer_id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path=str(tmp_path / "invoice.pdf"),
+        sha256="abc123",
+    )
+
+    window._refresh_active_transfer_chat()
+
+    assert "[附件] invoice.pdf" in window.transfer_messages_view.toPlainText()
+    assert "附件 1" in window.transfer_chat_meta.text()
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_transfer_refresh_timer_runs_only_on_active_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    assert not window.transfer_refresh_timer.isActive()
+
+    _pair_transfer_phone(window)
+    assert window.transfer_refresh_timer.isActive()
+
+    window._show_transfer_list_page()
+    assert not window.transfer_refresh_timer.isActive()
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_sidebar_navigation_preserves_active_transfer_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+
+    window.transfer_message_input.setPlainText("保留这次对话")
+    window.transfer_send_button.click()
+
+    window._show_notes_page()
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_chat_page
+    assert "保留这次对话" in window.transfer_messages_view.toPlainText()
+
+    window.close()
+
+
+def test_transfer_chat_exports_session_note_from_organize_menu(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    _pair_transfer_phone(window)
+    window.transfer_message_input.setPlainText("发票图片稍后发你")
+    window.transfer_send_button.click()
+
+    window._export_current_transfer_to_note()
+
+    conversation = window.service.get_transfer_conversation(window.current_transfer_id)
+    note = window.service.get_record(conversation.note_id)
+    assert note.category == "会话"
+    assert "发票图片稍后发你" in note.note
+    assert "已转存为小纸条" in window.transfer_chat_meta.text()
+
+    window.transfer_message_input.setPlainText("后续自动追加")
+    window.transfer_send_button.click()
+    note = window.service.get_record(conversation.note_id)
+    assert "后续自动追加" in note.note
+
+    window._show_notes_page()
+    assert window.note_list.count() == 1
+
+    window.close()
+
+
+def test_transfer_chat_shows_attachment_summary(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._show_current_transfer_attachments()
+
+    assert window.pages.currentWidget() == window.transfer_chat_page
+    assert "invoice.pdf" in window.transfer_chat_meta.text()
+    assert "4.0 KB" in window.transfer_chat_meta.text()
+
+    window.close()
+
+
+def test_transfer_attachments_download_to_default_dir(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    source = tmp_path / "source" / "invoice.pdf"
+    source.parent.mkdir()
+    source.write_text("pdf data", encoding="utf-8")
+    download_dir = tmp_path / "downloads"
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window.settings = replace(window.settings, transfer_download_dir=download_dir)
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._download_current_transfer_attachments()
+
+    assert (download_dir / "invoice.pdf").read_text(encoding="utf-8") == "pdf data"
+    assert "已下载 1 个附件" in window.transfer_chat_meta.text()
+    assert window.service.list_download_history()[0].filename == "invoice.pdf"
+
+    window.close()
+
+
+def test_transfer_detail_downloads_attachments(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    source = tmp_path / "source" / "invoice.pdf"
+    source.parent.mkdir()
+    source.write_text("pdf data", encoding="utf-8")
+    download_dir = tmp_path / "downloads"
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+    service.close_transfer_conversation(conversation.id)
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window.settings = replace(window.settings, transfer_download_dir=download_dir)
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._download_current_transfer_attachments()
+
+    assert (download_dir / "invoice.pdf").exists()
+    assert window.transfer_detail_notice.text() == "已下载 1 个附件"
+
+    window.close()
+
+
+def test_transfer_image_attachment_opens_preview(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    image_path = tmp_path / "invoice.png"
+    pixmap = QPixmap(2, 2)
+    pixmap.fill(QColor("#2563eb"))
+    assert pixmap.save(str(image_path), "PNG")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.IMAGE,
+        filename="invoice.png",
+        mime_type="image/png",
+        size_bytes=image_path.stat().st_size,
+        storage_path=str(image_path),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._preview_first_transfer_image()
+
+    assert window.image_preview_dialog.windowTitle() == "invoice.png"
+    assert not window.image_preview_pixmap.isNull()
+
+    window.image_preview_dialog.close()
+    window.close()
+
+
+def test_transfer_image_preview_reports_missing_source(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.IMAGE,
+        filename="missing.png",
+        mime_type="image/png",
+        size_bytes=100,
+        storage_path=str(tmp_path / "missing.png"),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._preview_first_transfer_image()
+
+    assert "图片文件不存在" in window.transfer_chat_meta.text()
+
+    window.close()
+
+
+def test_transfer_image_preview_ignores_non_image_attachment(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    source = tmp_path / "invoice.pdf"
+    source.write_text("pdf", encoding="utf-8")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._preview_first_transfer_image()
+
+    assert "当前会话没有图片附件" in window.transfer_chat_meta.text()
+
+    window.close()
+
+
+def test_settings_show_transfer_download_defaults_and_history(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    message, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    saved_path = tmp_path / "invoice.pdf"
+    saved_path.write_text("pdf", encoding="utf-8")
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=message.id,
+        attachment_id=attachment.id,
+        filename=attachment.filename,
+        saved_path=saved_path,
+        size_bytes=attachment.size_bytes,
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_settings_page()
+
+    assert "Downloads" in window.transfer_download_dir_label.text()
+    assert "SafeBox" in window.transfer_download_dir_label.text()
+
+    window._show_download_history_page()
+
+    assert window.pages.currentWidget() == window.download_history_page
+    assert window.download_history_list.count() == 1
+    assert "invoice.pdf" in window.download_history_status.text()
+    assert "文件存在" in window.download_history_status.text()
+
+    saved_path.unlink()
+    window._refresh_download_history()
+
+    assert "文件不存在" in window.download_history_status.text()
+
+    window._delete_selected_download_history()
+    assert window.download_history_list.count() == 1
+
+    window._clear_download_history()
+    assert window.download_history_status.text() == "下载历史为空"
+
+    window.close()
+
+
 def test_explicit_back_resets_account_module_to_list(
     vault_path: Path,
     monkeypatch,
@@ -284,6 +1169,7 @@ def test_sidebar_separates_management_nav_and_wraps_vault_summary(qt_app) -> Non
     window = MainWindow(lambda name: VaultService(Path(":memory:")))
 
     assert window.vault_subtitle.isHidden()
+    assert window.transfer_nav.text() == "传输助手"
     assert window.trash_nav.parent().objectName() == "ManagementNavGroup"
     assert window.settings_nav.parent().objectName() == "ManagementNavGroup"
 

@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from shutil import copy2
+from subprocess import Popen
+from uuid import uuid4
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QPixmap, QTextCharFormat, QTextCursor
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QIcon,
+    QPixmap,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -20,6 +34,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStackedWidget,
     QTextEdit,
@@ -40,6 +55,11 @@ from safebox.core.record_sorting import (
 )
 from safebox.core.services import try_unlock
 from safebox.core.settings import AppSettings
+from safebox.core.transfer import (
+    TransferConversationStatus,
+    TransferMessageKind,
+    TransferMessageSender,
+)
 from safebox.core.vault_profiles import (
     VaultProfileSettings,
     app_data_dir,
@@ -49,6 +69,7 @@ from safebox.core.vault_profiles import (
     save_profile_settings,
     sync_vault_to_backup,
 )
+from safebox.net.transfer_server import TransferHttpServer
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
 from safebox.ui.clipboard import SecureClipboard
 from safebox.ui.dialogs import (
@@ -82,14 +103,34 @@ class MainWindow(QMainWindow):
         self.clipboard = SecureClipboard(self.settings.clipboard_clear_seconds)
         self.current_account_id = ""
         self.current_note_id = ""
+        self.current_transfer_id = ""
+        self.transfer_server: TransferHttpServer | None = None
+        self.transfer_messages_signature = ""
+        self.transfer_connect_info_rows: list[QFrame] = []
+        self.active_nav_key = ""
         self.account_editing = False
         self.note_editing = False
+        self._loading_note_detail = False
+        self.batch_modes: dict[str, bool] = {
+            "accounts": False,
+            "notes": False,
+            "transfer": False,
+            "download_history": False,
+            "trash": False,
+        }
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
         self.note_format_buttons: list[QPushButton | QComboBox] = []
         self.note_format_brush: QTextCharFormat | None = None
+        self.toast_notice: QLabel | None = None
         self.idle_timer = QTimer(self)
         self.idle_timer.setInterval(self.profile_settings.auto_lock_seconds * 1000)
         self.idle_timer.timeout.connect(self._lock)
+        self.transfer_refresh_timer = QTimer(self)
+        self.transfer_refresh_timer.setInterval(1000)
+        self.transfer_refresh_timer.timeout.connect(self._refresh_active_transfer_chat)
+        self.transfer_pair_timer = QTimer(self)
+        self.transfer_pair_timer.setInterval(800)
+        self.transfer_pair_timer.timeout.connect(self._check_transfer_pairing)
         self.setWindowTitle("SafeBox")
         self._build_ui()
         self.installEventFilter(self)
@@ -135,6 +176,8 @@ class MainWindow(QMainWindow):
         self.accounts_nav.setObjectName("NavButtonActive")
         self.notes_nav = QPushButton("小纸条")
         self.notes_nav.setObjectName("NavButton")
+        self.transfer_nav = QPushButton("传输助手")
+        self.transfer_nav.setObjectName("NavButton")
         self.trash_nav = QPushButton("回收站")
         self.trash_nav.setObjectName("NavButton")
         self.settings_nav = QPushButton("设置")
@@ -152,6 +195,7 @@ class MainWindow(QMainWindow):
         side_layout.addSpacing(26)
         side_layout.addWidget(self.accounts_nav)
         side_layout.addWidget(self.notes_nav)
+        side_layout.addWidget(self.transfer_nav)
         side_layout.addStretch()
         side_layout.addWidget(management_nav)
         side_layout.addSpacing(12)
@@ -162,15 +206,25 @@ class MainWindow(QMainWindow):
         self.account_detail_page = self._build_account_detail_page()
         self.notes_page = self._build_notes_page()
         self.note_detail_page = self._build_note_detail_page()
+        self.transfer_page = self._build_transfer_page()
+        self.transfer_connect_page = self._build_transfer_connect_page()
+        self.transfer_detail_page = self._build_transfer_detail_page()
+        self.transfer_chat_page = self._build_transfer_chat_page()
         self.trash_page = self._build_trash_page()
         self.settings_page = self._build_settings_page()
+        self.download_history_page = self._build_download_history_page()
         for page in (
             self.accounts_page,
             self.account_detail_page,
             self.notes_page,
             self.note_detail_page,
+            self.transfer_page,
+            self.transfer_connect_page,
+            self.transfer_detail_page,
+            self.transfer_chat_page,
             self.trash_page,
             self.settings_page,
+            self.download_history_page,
         ):
             self.pages.addWidget(page)
         self._reset_module_pages()
@@ -181,6 +235,7 @@ class MainWindow(QMainWindow):
 
         self.accounts_nav.clicked.connect(self._show_accounts_page)
         self.notes_nav.clicked.connect(self._show_notes_page)
+        self.transfer_nav.clicked.connect(self._show_transfer_page)
         self.trash_nav.clicked.connect(self._show_trash_page)
         self.settings_nav.clicked.connect(self._show_settings_page)
         lock.clicked.connect(self._lock)
@@ -194,6 +249,11 @@ class MainWindow(QMainWindow):
         title.setObjectName("PageTitle")
         add = QPushButton("+ 新建账号")
         add.setObjectName("PrimaryButton")
+        self.account_multi_button = QPushButton("多选")
+        self.account_multi_button.setObjectName("SubtleButton")
+        self.account_delete_selected_button = QPushButton("删除选中")
+        self.account_delete_selected_button.setObjectName("DangerButton")
+        self.account_delete_selected_button.setVisible(False)
         self.account_status = QLabel("")
         self.account_status.setObjectName("DataStatus")
         self.account_status.setWordWrap(True)
@@ -213,6 +273,8 @@ class MainWindow(QMainWindow):
         self.account_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.addWidget(title)
         header.addStretch()
+        header.addWidget(self.account_multi_button)
+        header.addWidget(self.account_delete_selected_button)
         header.addWidget(add)
         layout.addLayout(header)
         layout.addWidget(self.account_status)
@@ -221,6 +283,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.account_list, 1)
 
         add.clicked.connect(self._add_account)
+        self.account_multi_button.clicked.connect(
+            lambda: self._toggle_batch_mode("accounts", self.account_list)
+        )
+        self.account_delete_selected_button.clicked.connect(self._delete_selected_accounts)
         self.account_sort.currentIndexChanged.connect(self._refresh_accounts)
         self.account_search.textChanged.connect(self._refresh_accounts)
         self.account_list.itemClicked.connect(self._open_account_item)
@@ -298,6 +364,11 @@ class MainWindow(QMainWindow):
         add.setObjectName("PrimaryButton")
         import_file = QPushButton("导入文档")
         import_file.setObjectName("SubtleButton")
+        self.note_multi_button = QPushButton("多选")
+        self.note_multi_button.setObjectName("SubtleButton")
+        self.note_delete_selected_button = QPushButton("删除选中")
+        self.note_delete_selected_button.setObjectName("DangerButton")
+        self.note_delete_selected_button.setVisible(False)
         import_file.setToolTip("仅支持 .txt、.md、.markdown 格式")
         self.note_status = QLabel("")
         self.note_status.setObjectName("DataStatus")
@@ -318,6 +389,8 @@ class MainWindow(QMainWindow):
         self.note_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.addWidget(title)
         header.addStretch()
+        header.addWidget(self.note_multi_button)
+        header.addWidget(self.note_delete_selected_button)
         header.addWidget(import_file)
         header.addWidget(add)
         layout.addLayout(header)
@@ -328,10 +401,320 @@ class MainWindow(QMainWindow):
 
         add.clicked.connect(self._new_note)
         import_file.clicked.connect(self._import_note_file)
+        self.note_multi_button.clicked.connect(
+            lambda: self._toggle_batch_mode("notes", self.note_list)
+        )
+        self.note_delete_selected_button.clicked.connect(self._delete_selected_notes)
         self.note_sort.currentIndexChanged.connect(self._refresh_notes)
         self.note_search.textChanged.connect(self._refresh_notes)
         self.note_list.itemClicked.connect(self._open_note_item)
         self.note_list.customContextMenuRequested.connect(self._show_note_context_menu)
+        return page
+
+    def _build_transfer_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        header = QHBoxLayout()
+        title = QLabel("传输助手")
+        title.setObjectName("PageTitle")
+        self.connect_phone_button = QPushButton("连接手机")
+        self.connect_phone_button.setObjectName("PrimaryButton")
+        self.connect_phone_button.setToolTip("打开连接页，手机无需输入验证码")
+        self.transfer_multi_button = QPushButton("多选")
+        self.transfer_multi_button.setObjectName("SubtleButton")
+        self.transfer_delete_selected_button = QPushButton("删除选中")
+        self.transfer_delete_selected_button.setObjectName("DangerButton")
+        self.transfer_delete_selected_button.setVisible(False)
+        self.transfer_status = QLabel("")
+        self.transfer_status.setObjectName("DataStatus")
+        self.transfer_status.setWordWrap(True)
+        self.transfer_status.setVisible(False)
+        self.transfer_search = QLineEdit()
+        self.transfer_search.setPlaceholderText("搜索传输记录、设备、状态")
+        self.transfer_device_notice = QLabel("手机打开连接链接后即可直接对话，无需验证码。")
+        self.transfer_device_notice.setObjectName("DataStatus")
+        self.transfer_list = QListWidget()
+        self.transfer_list.setObjectName("RecordList")
+        self.transfer_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(self.transfer_multi_button)
+        header.addWidget(self.transfer_delete_selected_button)
+        header.addWidget(self.connect_phone_button)
+        layout.addLayout(header)
+        layout.addWidget(self.transfer_status)
+        layout.addWidget(self.transfer_device_notice)
+        layout.addWidget(self.transfer_search)
+        layout.addWidget(self.transfer_list, 1)
+
+        self.transfer_search.textChanged.connect(self._refresh_transfer_conversations)
+        self.transfer_list.itemClicked.connect(self._open_transfer_item)
+        self.connect_phone_button.clicked.connect(self._show_connect_phone_placeholder)
+        self.transfer_multi_button.clicked.connect(
+            lambda: self._toggle_batch_mode("transfer", self.transfer_list)
+        )
+        self.transfer_delete_selected_button.clicked.connect(
+            self._delete_selected_transfer_conversations
+        )
+        return page
+
+    def _build_transfer_connect_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        top = QHBoxLayout()
+        back = QPushButton("返回列表")
+        back.setObjectName("SubtleButton")
+        self.transfer_connect_title = QLabel("连接手机")
+        self.transfer_connect_title.setObjectName("HeroTitle")
+        self.transfer_connect_meta = QLabel("手机和电脑在同一个 WiFi，或手机给电脑开热点。")
+        self.transfer_connect_meta.setObjectName("HeroMeta")
+        self.transfer_connect_url_value = QLabel("")
+        self.transfer_connect_url_value.setObjectName("SettingsValue")
+        self.transfer_connect_url_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.transfer_connect_code_value = QLabel("")
+        self.transfer_connect_code_value.setObjectName("SettingsValue")
+        self.transfer_connect_code_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        for value in (self.transfer_connect_url_value, self.transfer_connect_code_value):
+            value.setMinimumHeight(34)
+            value.setWordWrap(True)
+        self.transfer_connect_copy_button = QPushButton("复制连接链接")
+        self.transfer_connect_copy_button.setObjectName("PrimaryButton")
+        self.transfer_connect_open_chat_button = QPushButton("进入当前对话")
+        self.transfer_connect_open_chat_button.setObjectName("SubtleButton")
+        self.transfer_connect_status = QLabel("等待手机打开连接链接。")
+        self.transfer_connect_status.setObjectName("TransferConnectStatus")
+        self.transfer_connect_status.setMinimumHeight(48)
+        self.transfer_connect_status.setWordWrap(True)
+        self.transfer_trusted_list = QListWidget()
+        self.transfer_trusted_list.setObjectName("RecordList")
+        self.transfer_trusted_list.setFixedHeight(176)
+        self.transfer_trusted_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.transfer_trusted_connect_button = QPushButton("连接选中设备")
+        self.transfer_trusted_connect_button.setObjectName("PrimaryButton")
+        hero = QFrame()
+        hero.setObjectName("DetailHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(20, 16, 20, 16)
+        hero_layout.addWidget(self.transfer_connect_title)
+        hero_layout.addWidget(self.transfer_connect_meta)
+        connect_card = QFrame()
+        connect_card.setObjectName("SettingsCard")
+        connect_layout = QVBoxLayout(connect_card)
+        connect_layout.setContentsMargins(18, 16, 18, 16)
+        connect_layout.setSpacing(14)
+        connect_title = QLabel("手机浏览器连接")
+        connect_title.setObjectName("SettingsCardTitle")
+        connect_hint = QLabel("在手机浏览器打开地址即可进入对话，不需要再输入验证码。")
+        connect_hint.setObjectName("SettingsCardHint")
+        connect_hint.setWordWrap(True)
+        connect_layout.addWidget(connect_title)
+        connect_layout.addWidget(connect_hint)
+        connect_layout.addWidget(
+            self._transfer_connect_info_row("访问地址", self.transfer_connect_url_value)
+        )
+        connect_layout.addWidget(
+            self._transfer_connect_info_row("连接状态", self.transfer_connect_code_value)
+        )
+        connect_layout.addWidget(self.transfer_connect_status)
+        actions = QHBoxLayout()
+        actions.addStretch()
+        actions.addWidget(self.transfer_connect_open_chat_button)
+        actions.addWidget(self.transfer_connect_copy_button)
+        connect_layout.addLayout(actions)
+        trusted_card = QFrame()
+        trusted_card.setObjectName("SettingsCard")
+        trusted_layout = QVBoxLayout(trusted_card)
+        trusted_layout.setContentsMargins(18, 16, 18, 16)
+        trusted_layout.setSpacing(10)
+        trusted_title = QLabel("可信设备")
+        trusted_title.setObjectName("SettingsCardTitle")
+        trusted_hint = QLabel(
+            "信任后的手机会显示在这里。点击设备会创建新的手机对话，"
+            "手机仍需打开本次连接链接。"
+        )
+        trusted_hint.setObjectName("SettingsCardHint")
+        trusted_hint.setWordWrap(True)
+        trusted_actions = QHBoxLayout()
+        trusted_actions.addStretch()
+        trusted_actions.addWidget(self.transfer_trusted_connect_button)
+        trusted_layout.addWidget(trusted_title)
+        trusted_layout.addWidget(trusted_hint)
+        trusted_layout.addWidget(self.transfer_trusted_list)
+        trusted_layout.addLayout(trusted_actions)
+        steps = QFrame()
+        steps.setObjectName("SettingsCard")
+        steps_layout = QVBoxLayout(steps)
+        steps_layout.setContentsMargins(18, 16, 18, 16)
+        steps_layout.setSpacing(8)
+        steps_title = QLabel("连接步骤")
+        steps_title.setObjectName("SettingsCardTitle")
+        steps_layout.addWidget(steps_title)
+        for text in (
+            "1. 确认手机和电脑在同一个 WiFi，或手机给电脑开热点。",
+            "2. 手机打开访问地址，无需输入验证码。",
+            "3. 手机进入聊天页后，可在电脑端点击“信任此设备”。",
+        ):
+            row = QLabel(text)
+            row.setObjectName("SettingsValue")
+            row.setWordWrap(True)
+            steps_layout.addWidget(row)
+        top.addWidget(back)
+        top.addStretch()
+        layout.addLayout(top)
+        layout.addWidget(hero)
+        layout.addWidget(connect_card)
+        layout.addWidget(trusted_card)
+        layout.addWidget(steps)
+        layout.addStretch()
+
+        back.clicked.connect(self._show_transfer_list_page)
+        self.transfer_connect_copy_button.clicked.connect(self._copy_transfer_link)
+        self.transfer_connect_open_chat_button.clicked.connect(self._open_current_transfer_chat)
+        self.transfer_trusted_connect_button.clicked.connect(self._connect_selected_trusted_device)
+        return page
+
+    def _transfer_connect_info_row(self, label: str, value: QLabel) -> QFrame:
+        row = QFrame()
+        row.setObjectName("TransferConnectInfoRow")
+        row.setMinimumHeight(92)
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(4)
+        title = QLabel(label)
+        title.setObjectName("TransferConnectInfoLabel")
+        title.setMinimumHeight(22)
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        value.setWordWrap(True)
+        value.setMinimumHeight(28)
+        value.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(title)
+        layout.addWidget(value)
+        self.transfer_connect_info_rows.append(row)
+        return row
+
+    def _build_transfer_detail_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        top = QHBoxLayout()
+        back = QPushButton("返回列表")
+        back.setObjectName("SubtleButton")
+        self.transfer_detail_attachments_button = QPushButton("查看附件")
+        self.transfer_detail_attachments_button.setObjectName("SubtleButton")
+        self.transfer_detail_delete_button = QPushButton("删除记录")
+        self.transfer_detail_delete_button.setObjectName("DangerButton")
+        self.transfer_detail_title = QLabel("传输记录")
+        self.transfer_detail_title.setObjectName("HeroTitle")
+        self.transfer_detail_meta = QLabel("")
+        self.transfer_detail_meta.setObjectName("HeroMeta")
+        self.transfer_detail_notice = QLabel("只读查看：可复制消息文本，也可预览或下载附件")
+        self.transfer_detail_notice.setObjectName("DataStatus")
+        self.transfer_detail_notice.setWordWrap(True)
+        self.transfer_detail_messages_view = TransferMessageList()
+        self.transfer_detail_messages_view.setObjectName("TransferMessageList")
+        self.transfer_detail_messages_view.noticeRequested.connect(self._show_toast)
+        top.addWidget(back)
+        top.addStretch()
+        top.addWidget(self.transfer_detail_attachments_button)
+        top.addWidget(self.transfer_detail_delete_button)
+        hero = QFrame()
+        hero.setObjectName("DetailHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(20, 16, 20, 16)
+        hero_layout.addWidget(self.transfer_detail_title)
+        hero_layout.addWidget(self.transfer_detail_meta)
+        layout.addLayout(top)
+        layout.addWidget(hero)
+        layout.addWidget(self.transfer_detail_notice)
+        layout.addWidget(self.transfer_detail_messages_view, 1)
+
+        back.clicked.connect(self._show_transfer_list_page)
+        self.transfer_detail_attachments_button.clicked.connect(
+            self._show_current_transfer_attachments
+        )
+        self.transfer_detail_delete_button.clicked.connect(self._delete_current_transfer_record)
+        return page
+
+    def _build_transfer_chat_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        top = QHBoxLayout()
+        back = QPushButton("返回列表")
+        back.setObjectName("SubtleButton")
+        self.transfer_organize_button = QPushButton("整理")
+        self.transfer_organize_button.setObjectName("SubtleButton")
+        self.transfer_organize_menu = QMenu(self)
+        export_note_action = self.transfer_organize_menu.addAction("转存为小纸条")
+        show_attachments_action = self.transfer_organize_menu.addAction("查看附件")
+        preview_image_action = self.transfer_organize_menu.addAction("预览图片")
+        download_attachments_action = self.transfer_organize_menu.addAction("下载全部附件")
+        self.transfer_organize_button.setMenu(self.transfer_organize_menu)
+        self.transfer_trust_device_button = QPushButton("信任此设备")
+        self.transfer_trust_device_button.setObjectName("SubtleButton")
+        self.transfer_close_button = QPushButton("关闭此次对话")
+        self.transfer_close_button.setObjectName("DangerButton")
+        self.transfer_chat_title = QLabel("手机对话")
+        self.transfer_chat_title.setObjectName("HeroTitle")
+        self.transfer_chat_meta = QLabel("")
+        self.transfer_chat_meta.setObjectName("HeroMeta")
+        self.transfer_chat_connection = QLabel("")
+        self.transfer_chat_connection.setObjectName("DataStatus")
+        self.transfer_chat_connection.setWordWrap(True)
+        self.transfer_copy_link_button = QPushButton("复制链接")
+        self.transfer_copy_link_button.setObjectName("SubtleButton")
+        self.transfer_copy_link_button.setVisible(False)
+        connection_row = QHBoxLayout()
+        connection_row.addWidget(self.transfer_chat_connection, 1)
+        connection_row.addWidget(self.transfer_copy_link_button)
+        self.transfer_messages_view = TransferMessageList()
+        self.transfer_messages_view.setObjectName("TransferMessageList")
+        self.transfer_messages_view.noticeRequested.connect(self._show_toast)
+        self.transfer_message_input = QTextEdit()
+        self.transfer_message_input.setObjectName("TransferMessageInput")
+        self.transfer_message_input.setPlaceholderText("输入要发送给手机的文字")
+        self.transfer_message_input.setFixedHeight(92)
+        self.transfer_send_button = QPushButton("发送到手机")
+        self.transfer_send_button.setObjectName("PrimaryButton")
+        self.transfer_send_file_button = QPushButton("发送文件")
+        self.transfer_send_file_button.setObjectName("SubtleButton")
+        hero = QFrame()
+        hero.setObjectName("DetailHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(20, 16, 20, 16)
+        hero_layout.addWidget(self.transfer_chat_title)
+        hero_layout.addWidget(self.transfer_chat_meta)
+        hero_layout.addLayout(connection_row)
+        input_row = QHBoxLayout()
+        input_row.addWidget(self.transfer_message_input, 1)
+        input_row.addWidget(self.transfer_send_file_button)
+        input_row.addWidget(self.transfer_send_button)
+        top.addWidget(back)
+        top.addStretch()
+        top.addWidget(self.transfer_trust_device_button)
+        top.addWidget(self.transfer_organize_button)
+        top.addWidget(self.transfer_close_button)
+        layout.addLayout(top)
+        layout.addWidget(hero)
+        layout.addWidget(self.transfer_messages_view, 1)
+        layout.addLayout(input_row)
+
+        back.clicked.connect(self._show_transfer_list_page)
+        export_note_action.triggered.connect(self._export_current_transfer_to_note)
+        self.transfer_trust_device_button.clicked.connect(self._trust_current_transfer_device)
+        show_attachments_action.triggered.connect(self._show_current_transfer_attachments)
+        preview_image_action.triggered.connect(self._preview_first_transfer_image)
+        download_attachments_action.triggered.connect(self._download_current_transfer_attachments)
+        self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
+        self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
+        self.transfer_send_file_button.clicked.connect(self._send_current_transfer_file)
+        self.transfer_copy_link_button.clicked.connect(self._copy_transfer_link)
         return page
 
     def _build_note_detail_page(self) -> QWidget:
@@ -343,12 +726,16 @@ class MainWindow(QMainWindow):
         back.setObjectName("SubtleButton")
         self.note_edit_button = QPushButton("编辑")
         self.note_edit_button.setObjectName("SubtleButton")
+        self.note_attachments_button = QPushButton("查看附件")
+        self.note_attachments_button.setObjectName("SubtleButton")
+        self.note_attachments_button.setVisible(False)
         self.note_save_button = QPushButton("保存")
         self.note_save_button.setObjectName("PrimaryButton")
         delete = QPushButton("删除")
         delete.setObjectName("DangerButton")
         top.addWidget(back)
         top.addStretch()
+        top.addWidget(self.note_attachments_button)
         top.addWidget(self.note_edit_button)
         top.addWidget(self.note_save_button)
         top.addWidget(delete)
@@ -357,6 +744,7 @@ class MainWindow(QMainWindow):
         self.note_category = QComboBox()
         self.note_category.setEditable(True)
         self.note_category.addItems(NOTE_CATEGORIES)
+        self.note_category.setFixedWidth(150)
         self.note_source_info = QLabel("")
         self.note_source_info.setObjectName("SourceNotice")
         self.note_source_info.setVisible(False)
@@ -438,9 +826,12 @@ class MainWindow(QMainWindow):
             color_green,
             color_orange,
         ]
+        note_title_row = QHBoxLayout()
+        note_title_row.setSpacing(10)
+        note_title_row.addWidget(self.note_title_input, 1)
+        note_title_row.addWidget(self.note_category, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(top)
-        layout.addWidget(self.note_title_input)
-        layout.addWidget(self.note_category)
+        layout.addLayout(note_title_row)
         layout.addWidget(self.note_source_info)
         layout.addWidget(self.note_save_notice)
         layout.addLayout(toolbar)
@@ -448,7 +839,13 @@ class MainWindow(QMainWindow):
 
         back.clicked.connect(self._show_notes_list_page)
         self.note_edit_button.clicked.connect(self._enter_note_edit_mode)
+        self.note_attachments_button.clicked.connect(self._show_current_note_attachments)
         self.note_save_button.clicked.connect(self._save_current_note)
+        self.note_category.activated.connect(lambda _: self._save_current_note_category())
+        if self.note_category.lineEdit() is not None:
+            self.note_category.lineEdit().editingFinished.connect(
+                self._save_current_note_category
+            )
         delete.clicked.connect(self._delete_current_note)
         bold.clicked.connect(lambda: self._toggle_text_property("bold"))
         italic.clicked.connect(lambda: self._toggle_text_property("italic"))
@@ -476,6 +873,8 @@ class MainWindow(QMainWindow):
         title.setObjectName("PageTitle")
         clear = QPushButton("清空回收站")
         clear.setObjectName("DangerButton")
+        self.trash_multi_button = QPushButton("多选")
+        self.trash_multi_button.setObjectName("SubtleButton")
         self.trash_list = QListWidget()
         self.trash_list.setObjectName("RecordList")
         self.trash_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -489,6 +888,7 @@ class MainWindow(QMainWindow):
         action_row.addWidget(remove)
         header.addWidget(title)
         header.addStretch()
+        header.addWidget(self.trash_multi_button)
         header.addWidget(clear)
         layout.addLayout(header)
         layout.addWidget(self.trash_list, 1)
@@ -496,12 +896,21 @@ class MainWindow(QMainWindow):
 
         restore.clicked.connect(self._restore_selected_trash)
         remove.clicked.connect(self._delete_selected_trash_permanently)
+        self.trash_multi_button.clicked.connect(
+            lambda: self._toggle_batch_mode("trash", self.trash_list)
+        )
         clear.clicked.connect(self._clear_trash)
         return page
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setObjectName("PageScroll")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(14)
         title = QLabel("设置")
@@ -516,12 +925,18 @@ class MainWindow(QMainWindow):
         self.backup_dir_label = QLabel("")
         self.backup_dir_label.setObjectName("SettingsValue")
         self.backup_dir_label.setWordWrap(True)
+        self.transfer_download_dir_label = QLabel("")
+        self.transfer_download_dir_label.setObjectName("SettingsValue")
+        self.transfer_download_dir_label.setWordWrap(True)
         choose_backup = QPushButton("设置备份位置")
         choose_backup.setObjectName("SubtleButton")
         sync_now = QPushButton("立即同步")
-        sync_now.setObjectName("PrimaryButton")
+        sync_now.setObjectName("SyncNowButton")
+        sync_now.setMinimumWidth(100)
         restore_backup = QPushButton("从备份恢复")
         restore_backup.setObjectName("SubtleButton")
+        show_download_history = QPushButton("查看下载历史")
+        show_download_history.setObjectName("SubtleButton")
         self.auto_sync_check = QCheckBox("关闭软件时自动同步当前保险箱")
         self.auto_sync_check.setChecked(True)
         self.auto_lock_combo = QComboBox()
@@ -557,6 +972,17 @@ class MainWindow(QMainWindow):
         backup_actions.addStretch()
         backup_card.layout().addLayout(backup_actions)
         layout.addWidget(backup_card)
+        transfer_card = self._settings_card(
+            "传输助手",
+            "管理附件下载位置和下载历史。",
+            (("默认下载位置", self.transfer_download_dir_label),),
+        )
+        transfer_actions = QHBoxLayout()
+        transfer_actions.setSpacing(10)
+        transfer_actions.addWidget(show_download_history)
+        transfer_actions.addStretch()
+        transfer_card.layout().addLayout(transfer_actions)
+        layout.addWidget(transfer_card)
         security_card = self._settings_card(
             "安全",
             "控制自动同步和保险箱密码。",
@@ -585,10 +1011,75 @@ class MainWindow(QMainWindow):
         choose_backup.clicked.connect(self._choose_backup_dir)
         sync_now.clicked.connect(self._sync_current_vault)
         restore_backup.clicked.connect(self._restore_current_vault_from_backup)
+        show_download_history.clicked.connect(self._show_download_history_page)
         self.auto_sync_check.toggled.connect(self._set_auto_sync_on_close)
         self.auto_lock_combo.currentTextChanged.connect(self._set_auto_lock_mode)
         self.custom_auto_lock_minutes.valueChanged.connect(self._set_custom_auto_lock_minutes)
         change_password.clicked.connect(self._change_master_password)
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
+        return page
+
+    def _build_download_history_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        header = QHBoxLayout()
+        back = QPushButton("返回设置")
+        back.setObjectName("SubtleButton")
+        title = QLabel("下载历史")
+        title.setObjectName("PageTitle")
+        clear = QPushButton("清空下载列表")
+        clear.setObjectName("DangerButton")
+        self.download_history_multi_button = QPushButton("多选")
+        self.download_history_multi_button.setObjectName("SubtleButton")
+        self.download_history_status = QLabel("下载历史为空")
+        self.download_history_status.setObjectName("DataStatus")
+        self.download_history_status.setWordWrap(True)
+        self.download_history_list = QListWidget()
+        self.download_history_list.setObjectName("RecordList")
+        self.download_history_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.download_history_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.download_history_list.customContextMenuRequested.connect(
+            lambda position: self._show_download_history_context_menu(
+                self.download_history_list,
+                position,
+                self._refresh_download_history,
+                self.download_history_status,
+            )
+        )
+        action_row = QHBoxLayout()
+        open_record = QPushButton("打开选中文件")
+        open_record.setObjectName("PrimaryButton")
+        delete_record = QPushButton("清除选中记录")
+        delete_record.setObjectName("SubtleButton")
+        action_row.addStretch()
+        action_row.addWidget(open_record)
+        action_row.addWidget(delete_record)
+        header.addWidget(back)
+        header.addStretch()
+        header.addWidget(self.download_history_multi_button)
+        header.addWidget(clear)
+        layout.addLayout(header)
+        layout.addWidget(title)
+        layout.addWidget(self.download_history_status)
+        layout.addWidget(self.download_history_list, 1)
+        layout.addLayout(action_row)
+
+        back.clicked.connect(self._show_settings_page)
+        clear.clicked.connect(self._clear_download_history)
+        open_record.clicked.connect(self._open_selected_download_history)
+        delete_record.clicked.connect(self._delete_selected_download_history)
+        self.download_history_multi_button.clicked.connect(
+            lambda: self._toggle_batch_mode(
+                "download_history",
+                self.download_history_list,
+            )
+        )
         return page
 
     def _settings_card(
@@ -670,6 +1161,7 @@ class MainWindow(QMainWindow):
         self.module_pages = {
             "accounts": self.accounts_page,
             "notes": self.notes_page,
+            "transfer": self.transfer_page,
             "trash": self.trash_page,
             "settings": self.settings_page,
         }
@@ -681,10 +1173,17 @@ class MainWindow(QMainWindow):
         self._set_nav(module)
         self.pages.setCurrentWidget(self.module_pages.get(module, default_page))
 
+    def _module_is_showing_list(self, module: str, list_page: QWidget) -> bool:
+        return self.module_pages.get(module, list_page) is list_page
+
     def _set_nav(self, active: str) -> None:
+        if self.active_nav_key == active:
+            return
+        self.active_nav_key = active
         pairs = {
             "accounts": self.accounts_nav,
             "notes": self.notes_nav,
+            "transfer": self.transfer_nav,
             "trash": self.trash_nav,
             "settings": self.settings_nav,
         }
@@ -695,7 +1194,8 @@ class MainWindow(QMainWindow):
 
     def _show_accounts_page(self) -> None:
         self._show_module_page("accounts", self.accounts_page)
-        self._refresh_accounts()
+        if self._module_is_showing_list("accounts", self.accounts_page):
+            self._refresh_accounts()
 
     def _show_accounts_list_page(self) -> None:
         self._remember_module_page("accounts", self.accounts_page)
@@ -705,13 +1205,28 @@ class MainWindow(QMainWindow):
 
     def _show_notes_page(self) -> None:
         self._show_module_page("notes", self.notes_page)
-        self._refresh_notes()
+        if self._module_is_showing_list("notes", self.notes_page):
+            self._refresh_notes()
 
     def _show_notes_list_page(self) -> None:
         self._remember_module_page("notes", self.notes_page)
         self._set_nav("notes")
         self.pages.setCurrentWidget(self.notes_page)
         self._refresh_notes()
+
+    def _show_transfer_page(self) -> None:
+        self._show_module_page("transfer", self.transfer_page)
+        if self._module_is_showing_list("transfer", self.transfer_page):
+            self._refresh_transfer_conversations()
+
+    def _show_transfer_list_page(self) -> None:
+        self.transfer_refresh_timer.stop()
+        self.transfer_pair_timer.stop()
+        self.transfer_messages_signature = ""
+        self._remember_module_page("transfer", self.transfer_page)
+        self._set_nav("transfer")
+        self.pages.setCurrentWidget(self.transfer_page)
+        self._refresh_transfer_conversations()
 
     def _show_trash_page(self) -> None:
         self._remember_module_page("trash", self.trash_page)
@@ -724,6 +1239,149 @@ class MainWindow(QMainWindow):
         self._set_nav("settings")
         self._refresh_settings_view()
         self.pages.setCurrentWidget(self.settings_page)
+
+    def _show_download_history_page(self) -> None:
+        self._remember_module_page("settings", self.download_history_page)
+        self._set_nav("settings")
+        self.pages.setCurrentWidget(self.download_history_page)
+        self._refresh_download_history()
+
+    def _show_download_history_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("下载历史")
+        dialog.resize(720, 520)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(12)
+        header = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title = QLabel("下载历史")
+        title.setObjectName("DialogTitle")
+        subtitle = QLabel("最近保存到电脑的附件记录")
+        subtitle.setObjectName("MutedText")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        clear = QPushButton("清空列表")
+        clear.setObjectName("DangerButton")
+        clear.setMinimumWidth(98)
+        close = QPushButton("关闭")
+        close.setObjectName("SubtleButton")
+        header.addLayout(title_box, 1)
+        header.addWidget(clear)
+        header.addWidget(close)
+        list_widget = QListWidget()
+        list_widget.setObjectName("RecordList")
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        status = QLabel("")
+        status.setObjectName("DataStatus")
+        status.setWordWrap(True)
+        actions = QHBoxLayout()
+        open_record = QPushButton("打开文件")
+        open_record.setObjectName("PrimaryButton")
+        open_record.setMinimumWidth(100)
+        remove_record = QPushButton("清除记录")
+        remove_record.setObjectName("SubtleButton")
+        remove_record.setMinimumWidth(100)
+        actions.addStretch()
+        actions.addWidget(open_record)
+        actions.addWidget(remove_record)
+        layout.addLayout(header)
+        layout.addWidget(list_widget, 1)
+        layout.addWidget(status)
+        layout.addLayout(actions)
+
+        def refresh() -> None:
+            list_widget.clear()
+            history = self.service.list_download_history()
+            if not history:
+                status.setText("下载历史为空")
+                self._add_empty_record_item(list_widget, "当前没有下载记录")
+                return
+            status.setText(f"共 {len(history)} 条下载记录")
+            for record in history:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 74))
+                item.setData(Qt.ItemDataRole.UserRole, record.id)
+                state = "文件存在" if record.exists else "文件已删除"
+                summary = RecordSummary(
+                    id=record.id,
+                    type=RecordType.SECURE_NOTE,
+                    name=record.filename,
+                    account=record.saved_path,
+                    category=state,
+                    favorite=False,
+                    created_at=record.downloaded_at,
+                    updated_at=record.downloaded_at,
+                )
+                subtitle_text = (
+                    f"{_format_size_bytes(record.size_bytes)} · {record.saved_path}"
+                )
+                list_widget.addItem(item)
+                list_widget.setItemWidget(item, RecordListItem(summary, subtitle_text))
+
+        def selected_record():
+            item = list_widget.currentItem()
+            if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
+                return None
+            record_id = item.data(Qt.ItemDataRole.UserRole)
+            return next(
+                (entry for entry in self.service.list_download_history() if entry.id == record_id),
+                None,
+            )
+
+        def open_selected() -> None:
+            record = selected_record()
+            if record is None:
+                return
+            self._open_local_path(record.saved_path, status)
+
+        def remove_selected() -> None:
+            record = selected_record()
+            if record is None:
+                return
+            self.service.delete_download_history_record(record.id)
+            self._refresh_download_history()
+            refresh()
+
+        def clear_all() -> None:
+            self.service.clear_download_history()
+            self._refresh_download_history()
+            refresh()
+
+        list_widget.customContextMenuRequested.connect(
+            lambda position: self._show_download_history_context_menu(
+                list_widget,
+                position,
+                refresh,
+                status,
+            )
+        )
+        open_record.clicked.connect(open_selected)
+        remove_record.clicked.connect(remove_selected)
+        clear.clicked.connect(clear_all)
+        close.clicked.connect(dialog.close)
+        refresh()
+        self.download_history_dialog = dialog
+        dialog.show()
+
+    def _show_toast(self, message: str) -> None:
+        if not message:
+            return
+        if self.toast_notice is None:
+            self.toast_notice = QLabel(self)
+            self.toast_notice.setObjectName("ToastNotice")
+            self.toast_notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.toast_notice.setText(message)
+        self.toast_notice.adjustSize()
+        width = min(max(self.toast_notice.width() + 28, 180), 520)
+        height = max(self.toast_notice.height() + 10, 42)
+        sidebar_width = 220
+        x = sidebar_width + max(20, (self.width() - sidebar_width - width) // 2)
+        self.toast_notice.setGeometry(x, 32, width, height)
+        self.toast_notice.show()
+        self.toast_notice.raise_()
+        QTimer.singleShot(1800, self.toast_notice.hide)
 
     def _change_master_password(self) -> None:
         dialog = ChangePasswordDialog(self)
@@ -745,6 +1403,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_settings_view(self) -> None:
         self.settings_vault_label.setText(f"当前保险箱ID：{self.vault_name}")
+        self.transfer_download_dir_label.setText(str(self.settings.transfer_download_dir))
         backup_dir = self.profile_settings.backup_dir or "未设置"
         backup_file = ""
         if backup_dir != "未设置":
@@ -876,53 +1535,860 @@ class MainWindow(QMainWindow):
 
     def _refresh_accounts(self) -> None:
         query = self.account_search.text().strip()
+        self.account_list.setUpdatesEnabled(False)
         self.account_list.clear()
-        all_summaries = self.service.search("")
-        summaries = [
-            summary for summary in self.service.search(query) if summary.type == RecordType.ACCOUNT
-        ]
-        sorted_accounts = sorted_summaries(summaries, self._selected_sort_mode(self.account_sort))
-        self._update_data_status("accounts", all_summaries, len(sorted_accounts))
-        if not sorted_accounts:
-            self._add_empty_record_item(
-                self.account_list,
-                "当前没有账号记录" if not query else "没有找到匹配的账号记录",
+        self._apply_batch_mode("accounts", self.account_list)
+        try:
+            records = self.service.active_records()
+            all_summaries = [self.service.summary_for(record) for record in records]
+            term = query.casefold()
+            summaries = [
+                self.service.summary_for(record)
+                for record in records
+                if record.type == RecordType.ACCOUNT
+                and (not term or term in _record_search_text(record))
+            ]
+            sorted_accounts = sorted_summaries(
+                summaries,
+                self._selected_sort_mode(self.account_sort),
             )
-            return
-        for summary in sorted_accounts:
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 74))
-            item.setData(Qt.ItemDataRole.UserRole, summary.id)
-            self.account_list.addItem(item)
-            self.account_list.setItemWidget(item, RecordListItem(summary, ""))
+            self._update_data_status("accounts", all_summaries, len(sorted_accounts))
+            if not sorted_accounts:
+                self._add_empty_record_item(
+                    self.account_list,
+                    "当前没有账号记录" if not query else "没有找到匹配的账号记录",
+                )
+                return
+            for summary in sorted_accounts:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 74))
+                item.setData(Qt.ItemDataRole.UserRole, summary.id)
+                self.account_list.addItem(item)
+                self.account_list.setItemWidget(item, RecordListItem(summary, ""))
+        finally:
+            self.account_list.setUpdatesEnabled(True)
+            self.account_list.viewport().update()
 
     def _refresh_notes(self) -> None:
         query = self.note_search.text().strip()
+        self.note_list.setUpdatesEnabled(False)
         self.note_list.clear()
-        all_summaries = self.service.search("")
-        summaries = [
-            summary
-            for summary in self.service.search(query)
-            if summary.type == RecordType.SECURE_NOTE
-        ]
-        sorted_notes = sorted_summaries(summaries, self._selected_sort_mode(self.note_sort))
-        self._update_data_status("notes", all_summaries, len(sorted_notes))
-        if not sorted_notes:
-            self._add_empty_record_item(
-                self.note_list,
-                "当前没有小纸条记录" if not query else "没有找到匹配的小纸条记录",
+        self._apply_batch_mode("notes", self.note_list)
+        try:
+            records = self.service.active_records()
+            all_summaries = [self.service.summary_for(record) for record in records]
+            term = query.casefold()
+            note_records = [
+                record
+                for record in records
+                if record.type == RecordType.SECURE_NOTE
+                and (not term or term in _record_search_text(record))
+            ]
+            sorted_notes = sorted_summaries(
+                [self.service.summary_for(record) for record in note_records],
+                self._selected_sort_mode(self.note_sort),
             )
+            notes_by_id = {record.id: record for record in note_records}
+            self._update_data_status("notes", all_summaries, len(sorted_notes))
+            if not sorted_notes:
+                self._add_empty_record_item(
+                    self.note_list,
+                    "当前没有小纸条记录" if not query else "没有找到匹配的小纸条记录",
+                )
+                return
+            for summary in sorted_notes:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 74))
+                item.setData(Qt.ItemDataRole.UserRole, summary.id)
+                self.note_list.addItem(item)
+                record = notes_by_id[summary.id]
+                self.note_list.setItemWidget(
+                    item,
+                    RecordListItem(summary, note_plain_summary(record.note)),
+                )
+        finally:
+            self.note_list.setUpdatesEnabled(True)
+            self.note_list.viewport().update()
+
+    def _refresh_transfer_conversations(self) -> None:
+        query = self.transfer_search.text().strip()
+        self.transfer_list.setUpdatesEnabled(False)
+        self.transfer_list.clear()
+        self._apply_batch_mode("transfer", self.transfer_list)
+        try:
+            conversations = self.service.list_transfer_conversations(query)
+            self.transfer_status.setText("")
+            self.transfer_status.setVisible(False)
+            if not conversations:
+                self._add_empty_record_item(
+                    self.transfer_list,
+                    "当前没有传输记录" if not query else "没有找到匹配的传输记录",
+                )
+                return
+            for conversation in conversations:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 74))
+                item.setData(Qt.ItemDataRole.UserRole, conversation.id)
+                self.transfer_list.addItem(item)
+                summary = RecordSummary(
+                    id=conversation.id,
+                    type=RecordType.SECURE_NOTE,
+                    name=conversation.title,
+                    account=conversation.device_name,
+                    category=self._transfer_conversation_status_label(conversation),
+                    favorite=False,
+                    created_at=conversation.created_at,
+                    updated_at=conversation.updated_at,
+                )
+                subtitle = (
+                    f"{conversation.device_name} · "
+                    f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
+                )
+                self.transfer_list.setItemWidget(item, RecordListItem(summary, subtitle))
+        finally:
+            self.transfer_list.setUpdatesEnabled(True)
+            self.transfer_list.viewport().update()
+
+    def _open_transfer_item(self, item: QListWidgetItem) -> None:
+        if self.batch_modes.get("transfer"):
             return
-        for summary in sorted_notes:
+        self.current_transfer_id = item.data(Qt.ItemDataRole.UserRole)
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        if self._transfer_conversation_is_open(conversation):
+            self._show_transfer_chat(conversation.id)
+            return
+        self.transfer_detail_title.setText(conversation.title)
+        self.transfer_detail_meta.setText(
+            f"{conversation.device_name} · {self._transfer_conversation_status_label(conversation)}"
+        )
+        self._render_transfer_messages(
+            conversation.id,
+            target_view=self.transfer_detail_messages_view,
+        )
+        self._remember_module_page("transfer", self.transfer_detail_page)
+        self.pages.setCurrentWidget(self.transfer_detail_page)
+
+    def _show_connect_phone_placeholder(self) -> None:
+        active_conversation = self._open_transfer_conversation()
+        if active_conversation is not None:
+            self.current_transfer_id = active_conversation.id
+            link_text = self._current_transfer_link_text()
+            self.transfer_connect_url_value.setText(
+                link_text or "当前会话已存在，请进入对话继续使用"
+            )
+            self.transfer_connect_code_value.setText("已有进行中的会话")
+            status = "已有进行中的手机会话，可进入当前对话"
+            if link_text:
+                status = f"{status}或复制连接。"
+            else:
+                status = f"{status}。"
+            self.transfer_connect_status.setText(status)
+            self._refresh_trusted_transfer_devices()
+            self._remember_module_page("transfer", self.transfer_connect_page)
+            self._set_nav("transfer")
+            self.pages.setCurrentWidget(self.transfer_connect_page)
+            self._show_toast("已有进行中的手机会话")
+            return
+        if self.transfer_server is not None:
+            self._stop_transfer_server(close_conversation=True)
+        self._start_transfer_server("手机浏览器")
+        self.transfer_status.setText("")
+        self.transfer_status.setVisible(False)
+        self.current_transfer_id = ""
+        self.transfer_connect_url_value.setText(self.transfer_server.display_url)
+        self.transfer_connect_code_value.setText("等待手机打开链接")
+        self.transfer_connect_status.setText("手机打开连接链接后会自动进入对话。")
+        self._refresh_trusted_transfer_devices()
+        self._remember_module_page("transfer", self.transfer_connect_page)
+        self._set_nav("transfer")
+        self.pages.setCurrentWidget(self.transfer_connect_page)
+        self.transfer_pair_timer.start()
+
+    def _start_transfer_server(self, device_name: str) -> None:
+        self.transfer_server = TransferHttpServer(self.service, device_name=device_name)
+        self.transfer_server.start()
+
+    def _open_transfer_conversation(self):
+        for conversation in self.service.list_transfer_conversations():
+            if self._transfer_conversation_is_open(conversation):
+                return conversation
+        return None
+
+    def _check_transfer_pairing(self) -> None:
+        if self.transfer_server is None:
+            self.transfer_pair_timer.stop()
+            return
+        if not self.transfer_server.paired or not self.transfer_server.conversation_id:
+            self.transfer_connect_status.setText("等待手机打开连接链接。")
+            return
+        try:
+            conversation = self.service.get_transfer_conversation(
+                self.transfer_server.conversation_id
+            )
+        except KeyError:
+            self.transfer_pair_timer.stop()
+            return
+        if not self._transfer_conversation_is_open(conversation):
+            self.transfer_pair_timer.stop()
+            self.transfer_connect_status.setText("此次连接已关闭。")
+            return
+        self.transfer_pair_timer.stop()
+        self._show_transfer_chat(conversation.id)
+
+    def _show_transfer_chat(self, conversation_id: str) -> None:
+        if self.current_transfer_id != conversation_id:
+            self.transfer_messages_signature = ""
+        self.current_transfer_id = conversation_id
+        conversation = self.service.get_transfer_conversation(conversation_id)
+        writable = self._transfer_conversation_is_open(conversation)
+        self.transfer_chat_title.setText(conversation.title)
+        self.transfer_chat_meta.setText(self._transfer_chat_meta(conversation.id))
+        self._refresh_transfer_trust_button(conversation.device_name)
+        if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
+            self.transfer_chat_connection.setText("")
+            self.transfer_chat_connection.setVisible(False)
+            self.transfer_copy_link_button.setVisible(False)
+        else:
+            self._refresh_transfer_connection_status(conversation)
+        self._render_transfer_messages(conversation_id)
+        self.transfer_message_input.setEnabled(writable)
+        self.transfer_send_button.setEnabled(writable)
+        self.transfer_send_file_button.setEnabled(writable)
+        self.transfer_close_button.setVisible(writable)
+        self._remember_module_page("transfer", self.transfer_chat_page)
+        self._set_nav("transfer")
+        self.pages.setCurrentWidget(self.transfer_chat_page)
+        if writable and not self.transfer_refresh_timer.isActive():
+            self.transfer_refresh_timer.start()
+        if not writable:
+            self.transfer_refresh_timer.stop()
+
+    def _refresh_transfer_trust_button(self, device_name: str) -> None:
+        trusted = self._trusted_device_by_name(device_name) is not None
+        self.transfer_trust_device_button.setText("已信任设备" if trusted else "信任此设备")
+        self.transfer_trust_device_button.setEnabled(not trusted)
+        self._refresh_button_style(self.transfer_trust_device_button)
+
+    def _refresh_active_transfer_chat(self) -> None:
+        if (
+            not self.current_transfer_id
+            or not self.service.is_unlocked()
+            or self.pages.currentWidget() != self.transfer_chat_page
+        ):
+            return
+        try:
+            conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+            if not self._transfer_conversation_is_open(conversation):
+                self.transfer_refresh_timer.stop()
+                self._show_transfer_chat(conversation.id)
+                return
+            self.transfer_chat_meta.setText(self._transfer_chat_meta(self.current_transfer_id))
+            self._refresh_transfer_connection_status(conversation)
+            self._render_transfer_messages(self.current_transfer_id)
+        except KeyError:
+            self.transfer_refresh_timer.stop()
+
+    def _send_current_transfer_text(self) -> None:
+        if not self.current_transfer_id:
+            return
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        if not self._transfer_conversation_is_open(conversation):
+            return
+        text = self.transfer_message_input.toPlainText().strip()
+        if not text:
+            return
+        try:
+            self.service.add_transfer_text_message(
+                self.current_transfer_id,
+                sender=TransferMessageSender.DESKTOP,
+                text=text,
+            )
+        except ValueError as exc:
+            self._set_transfer_attachment_status(str(exc))
+            return
+        self.transfer_message_input.clear()
+        self._show_transfer_chat(self.current_transfer_id)
+
+    def _send_current_transfer_file(self) -> None:
+        if not self.current_transfer_id:
+            return
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        if not self._transfer_conversation_is_open(conversation):
+            return
+        filename, _ = QFileDialog.getOpenFileName(self, "选择要发送的文件")
+        if not filename:
+            return
+        source = Path(filename)
+        if not source.exists():
+            self._set_transfer_attachment_status("文件不存在")
+            return
+        target_dir = self.service.store.path.parent / "attachments" / conversation.id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = _unique_local_path(target_dir / source.name)
+        copy2(source, target)
+        mime_type = _guess_mime_type(source)
+        kind = (
+            TransferMessageKind.IMAGE
+            if mime_type.startswith("image/")
+            or source.suffix.casefold() in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+            else TransferMessageKind.FILE
+        )
+        self.service.add_transfer_attachment_message(
+            self.current_transfer_id,
+            sender=TransferMessageSender.DESKTOP,
+            kind=kind,
+            filename=source.name,
+            mime_type=mime_type,
+            size_bytes=target.stat().st_size,
+            storage_path=str(target),
+        )
+        self._show_transfer_chat(self.current_transfer_id)
+
+    def _copy_transfer_link(self) -> None:
+        text = self._current_transfer_link_text()
+        if not text:
+            return
+        self.clipboard.copy(text)
+        self.transfer_chat_connection.setText(f"手机访问：{text}\n链接已复制。")
+        if self.pages.currentWidget() == self.transfer_connect_page:
+            self.transfer_connect_status.setText("连接链接已复制。")
+        self._show_toast("连接链接已复制")
+
+    def _current_transfer_link_text(self) -> str:
+        if self.transfer_server is None:
+            return ""
+        return self.transfer_server.display_url
+
+    def _refresh_transfer_connection_status(self, conversation) -> None:
+        if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
+            return
+        if self.transfer_server.paired:
+            self.transfer_chat_connection.setText("")
+            self.transfer_chat_connection.setVisible(False)
+            self.transfer_copy_link_button.setVisible(False)
+            return
+        pair_status = "等待手机打开链接"
+        self.transfer_chat_connection.setText(
+            f"手机访问：{self.transfer_server.display_url}\n"
+            f"{pair_status}，打开链接即可连接。{self._transfer_chat_hint(conversation)}"
+        )
+        self.transfer_chat_connection.setVisible(True)
+        self.transfer_copy_link_button.setVisible(True)
+
+    def _transfer_chat_hint(self, conversation) -> str:
+        if not self._transfer_conversation_is_open(conversation):
+            return "此次对话已关闭，只能查看历史消息"
+        if conversation.note_id:
+            return "已转存为小纸条，新消息会继续同步到该小纸条"
+        return "可互发文字、图片和文件"
+
+    def _transfer_conversation_is_open(self, conversation) -> bool:
+        return (
+            conversation.status
+            in {TransferConversationStatus.ACTIVE, TransferConversationStatus.TRANSFERRED}
+            and not conversation.closed_at
+        )
+
+    def _transfer_conversation_status_label(self, conversation) -> str:
+        if conversation.closed_at:
+            return "已关闭 · 已转存" if conversation.note_id else "已关闭"
+        return _transfer_status_label(conversation.status.value)
+
+    def _close_current_transfer_chat(self) -> None:
+        if not self.current_transfer_id:
+            return
+        self.transfer_refresh_timer.stop()
+        self.service.close_transfer_conversation(self.current_transfer_id)
+        self._show_transfer_list_page()
+
+    def _open_current_transfer_chat(self) -> None:
+        if self.current_transfer_id:
+            self._show_transfer_chat(self.current_transfer_id)
+
+    def _refresh_trusted_transfer_devices(self) -> None:
+        self.transfer_trusted_list.clear()
+        devices = self.profile_settings.trusted_transfer_devices
+        if not devices:
+            self._add_empty_record_item(self.transfer_trusted_list, "暂无可信设备")
+            return
+        for device in devices:
             item = QListWidgetItem()
             item.setSizeHint(QSize(0, 74))
-            item.setData(Qt.ItemDataRole.UserRole, summary.id)
-            self.note_list.addItem(item)
-            record = self.service.get_record(summary.id)
-            self.note_list.setItemWidget(
-                item,
-                RecordListItem(summary, note_plain_summary(record.note)),
+            item.setData(Qt.ItemDataRole.UserRole, device["id"])
+            self.transfer_trusted_list.addItem(item)
+            summary = RecordSummary(
+                id=device["id"],
+                type=RecordType.SECURE_NOTE,
+                name=device["name"],
+                account="可信手机",
+                category="可信设备",
+                favorite=False,
+                created_at=device.get("last_connected_at", ""),
+                updated_at=device.get("last_connected_at", ""),
             )
+            subtitle = device.get("last_connected_at", "") or "点击后创建新的手机对话"
+            self.transfer_trusted_list.setItemWidget(item, RecordListItem(summary, subtitle))
+
+    def _connect_selected_trusted_device(self) -> None:
+        item = self.transfer_trusted_list.currentItem()
+        if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
+            self._show_toast("请选择可信设备")
+            return
+        device = self._trusted_device_by_id(item.data(Qt.ItemDataRole.UserRole))
+        if device is None:
+            self._show_toast("可信设备不存在")
+            self._refresh_trusted_transfer_devices()
+            return
+        active_conversation = self._open_transfer_conversation()
+        if active_conversation is not None:
+            self.current_transfer_id = active_conversation.id
+            self._show_toast("已有进行中的手机会话")
+            return
+        if self.transfer_server is not None:
+            self._stop_transfer_server(close_conversation=True)
+        self._start_transfer_server(device["name"])
+        self.current_transfer_id = ""
+        device["last_connected_at"] = _now_local()
+        save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
+        self.transfer_connect_url_value.setText(self.transfer_server.display_url)
+        self.transfer_connect_code_value.setText("等待可信设备打开链接")
+        self.transfer_connect_status.setText("等待可信设备打开链接，连接后才会创建对话。")
+        self._refresh_trusted_transfer_devices()
+        self.transfer_pair_timer.start()
+        self._show_toast("已准备可信设备连接")
+
+    def _trust_current_transfer_device(self) -> None:
+        if not self.current_transfer_id:
+            return
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        default_name = conversation.device_name or "我的手机"
+        if self._trusted_device_by_name(default_name) is not None:
+            self._refresh_transfer_trust_button(default_name)
+            self._show_toast("此设备已信任")
+            return
+        name, ok = QInputDialog.getText(self, "信任此设备", "设备名称", text=default_name)
+        if not ok:
+            return
+        clean_name = name.strip() or default_name
+        existing = self._trusted_device_by_name(clean_name)
+        if existing is None:
+            self.profile_settings.trusted_transfer_devices.append(
+                {
+                    "id": f"td_{uuid4().hex}",
+                    "name": clean_name,
+                    "last_connected_at": _now_local(),
+                }
+            )
+        else:
+            existing["last_connected_at"] = _now_local()
+        save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
+        self._refresh_transfer_trust_button(clean_name)
+        self._show_toast("已信任此设备")
+
+    def _trusted_device_by_id(self, device_id: str) -> dict[str, str] | None:
+        return next(
+            (
+                device
+                for device in self.profile_settings.trusted_transfer_devices
+                if device["id"] == device_id
+            ),
+            None,
+        )
+
+    def _trusted_device_by_name(self, device_name: str) -> dict[str, str] | None:
+        clean_name = device_name.strip()
+        return next(
+            (
+                device
+                for device in self.profile_settings.trusted_transfer_devices
+                if device["name"] == clean_name
+            ),
+            None,
+        )
+
+    def _delete_current_transfer_record(self) -> None:
+        if not self.current_transfer_id:
+            return
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        if self._transfer_conversation_is_open(conversation):
+            self.transfer_detail_notice.setText("进行中的对话不能删除，请先关闭此次对话")
+            return
+        self.service.delete_transfer_conversation(self.current_transfer_id)
+        self.current_transfer_id = ""
+        self._show_transfer_list_page()
+
+    def _export_current_transfer_to_note(self) -> None:
+        if not self.current_transfer_id:
+            return
+        self.service.export_transfer_conversation_to_note(self.current_transfer_id)
+        self.transfer_chat_meta.setText(self._transfer_chat_meta(self.current_transfer_id))
+        self._refresh_notes()
+        self._show_toast("已转存为小纸条")
+
+    def _format_transfer_messages(self, conversation_id: str) -> str:
+        lines: list[str] = []
+        for message in self.service.list_transfer_messages(conversation_id):
+            sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            content = message.text or self._transfer_message_attachment_label(
+                conversation_id,
+                message.attachment_id,
+            )
+            lines.append(f"{sender} {message.created_at}\n{content}")
+        return "\n\n".join(lines)
+
+    def _render_transfer_messages(
+        self,
+        conversation_id: str,
+        *,
+        target_view: TransferMessageList | None = None,
+    ) -> None:
+        view = target_view or self.transfer_messages_view
+        messages = self.service.list_transfer_messages(conversation_id)
+        attachments = self.service.list_transfer_attachments(conversation_id)
+        signature = self._transfer_messages_signature(messages, attachments)
+        if target_view is None and signature == self.transfer_messages_signature:
+            return
+        if target_view is None:
+            self.transfer_messages_signature = signature
+        view.set_messages(
+            messages,
+            {attachment.id: attachment for attachment in attachments},
+            preview_attachment=self._preview_transfer_attachment_by_id,
+            download_attachment=self._download_transfer_attachment_by_id,
+        )
+
+    def _transfer_messages_signature(self, messages, attachments) -> str:
+        message_parts = [
+            f"{message.id}:{message.updated_at}:{message.edited_at}:{message.text}:"
+            f"{message.attachment_id}"
+            for message in messages
+        ]
+        attachment_parts = [
+            f"{attachment.id}:{attachment.filename}:{attachment.size_bytes}:"
+            f"{attachment.storage_path}"
+            for attachment in attachments
+        ]
+        return "|".join([*message_parts, *attachment_parts])
+
+    def _show_current_transfer_attachments(self) -> None:
+        if not self.current_transfer_id:
+            return
+        self._show_transfer_attachments_dialog(self.current_transfer_id)
+
+    def _download_current_transfer_attachments(self, conversation_id: str = "") -> None:
+        target_conversation_id = conversation_id or self.current_transfer_id
+        if not target_conversation_id:
+            return
+        attachments = self.service.list_transfer_attachments(target_conversation_id)
+        downloaded = 0
+        failed = 0
+        for attachment in attachments:
+            try:
+                self.service.download_transfer_attachment(
+                    conversation_id=target_conversation_id,
+                    attachment_id=attachment.id,
+                    download_dir=self.settings.transfer_download_dir,
+                )
+                downloaded += 1
+            except FileNotFoundError:
+                failed += 1
+        message = f"已下载 {downloaded} 个附件"
+        if failed:
+            message = f"{message}，{failed} 个源文件不存在"
+        self._set_transfer_attachment_status(message)
+        self._refresh_download_history()
+        self._show_download_history_dialog()
+
+    def _download_transfer_attachment_by_id(self, attachment_id: str) -> None:
+        if not self.current_transfer_id:
+            return
+        attachment = self._download_transfer_attachment(
+            self.current_transfer_id,
+            attachment_id,
+        )
+        if attachment is not None:
+            self._set_transfer_attachment_status(f"已下载 {attachment.filename}")
+            self._show_download_history_dialog()
+
+    def _preview_transfer_attachment_by_id(self, attachment_id: str) -> None:
+        if not self.current_transfer_id:
+            return
+        attachment = next(
+            (
+                item
+                for item in self.service.list_transfer_attachments(self.current_transfer_id)
+                if item.id == attachment_id
+            ),
+            None,
+        )
+        if attachment is None:
+            self._set_transfer_attachment_status("附件不存在")
+            return
+        self._preview_transfer_image_attachment(attachment)
+
+    def _preview_first_transfer_image(self) -> None:
+        if not self.current_transfer_id:
+            return
+        attachment = self._first_transfer_image_attachment(self.current_transfer_id)
+        if attachment is None:
+            self._set_transfer_attachment_status("当前会话没有图片附件")
+            return
+        self._preview_transfer_image_attachment(attachment)
+
+    def _preview_transfer_image_attachment(self, attachment) -> None:
+        source = Path(attachment.storage_path)
+        if not source.exists():
+            self._set_transfer_attachment_status("图片文件不存在")
+            return
+        pixmap = QPixmap(str(source))
+        if pixmap.isNull():
+            self._set_transfer_attachment_status("图片无法预览")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(attachment.filename)
+        dialog.resize(720, 520)
+        layout = QVBoxLayout(dialog)
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setPixmap(
+            pixmap.scaled(
+                680,
+                460,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        layout.addWidget(label)
+        self.image_preview_dialog = dialog
+        self.image_preview_pixmap = pixmap
+        dialog.show()
+
+    def _download_transfer_attachment(self, conversation_id: str, attachment_id: str):
+        try:
+            return self.service.download_transfer_attachment(
+                conversation_id=conversation_id,
+                attachment_id=attachment_id,
+                download_dir=self.settings.transfer_download_dir,
+            )
+        except FileNotFoundError:
+            self._set_transfer_attachment_status("附件源文件不存在")
+            return None
+
+    def _show_transfer_attachments_dialog(self, conversation_id: str) -> None:
+        conversation = self.service.get_transfer_conversation(conversation_id)
+        attachments = self.service.list_transfer_attachments(conversation_id)
+        if not attachments:
+            self._set_transfer_attachment_status("当前会话没有附件")
+            return
+        summary = "；".join(
+            f"{attachment.filename} · {attachment.mime_type or '未知类型'} · "
+            f"{_format_size_bytes(attachment.size_bytes)}"
+            for attachment in attachments
+        )
+        self._set_transfer_attachment_status(summary)
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{conversation.title} · 会话附件")
+        dialog.resize(760, 560)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(12)
+        header = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title = QLabel("会话附件")
+        title.setObjectName("DialogTitle")
+        subtitle = QLabel(f"{conversation.title} · 共 {len(attachments)} 个附件")
+        subtitle.setObjectName("MutedText")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        download_all = QPushButton("下载全部")
+        download_all.setObjectName("PrimaryButton")
+        download_all.setMinimumWidth(100)
+        close = QPushButton("关闭")
+        close.setObjectName("SubtleButton")
+        header.addLayout(title_box, 1)
+        header.addWidget(download_all)
+        header.addWidget(close)
+        layout.addLayout(header)
+        status = QLabel("")
+        status.setObjectName("DataStatus")
+        status.setWordWrap(True)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setObjectName("AttachmentScroll")
+        content = QWidget()
+        content.setObjectName("AttachmentScrollContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(2, 2, 2, 2)
+        content_layout.setSpacing(10)
+        for attachment in attachments:
+            row = QFrame()
+            row.setObjectName("AttachmentCard")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(14, 12, 14, 12)
+            row_layout.setSpacing(12)
+            if self._is_transfer_image_attachment(attachment):
+                preview_box = QLabel()
+                preview_box.setObjectName("AttachmentThumb")
+                preview_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                pixmap = QPixmap(attachment.storage_path)
+                if pixmap.isNull():
+                    preview_box.setText("图片")
+                else:
+                    preview_box.setPixmap(
+                        pixmap.scaled(
+                            128,
+                            88,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                    )
+                row_layout.addWidget(preview_box)
+            else:
+                file_icon = QLabel("文件")
+                file_icon.setObjectName("AttachmentFileIcon")
+                file_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                row_layout.addWidget(file_icon)
+            info = QLabel(
+                f"{attachment.filename}\n"
+                f"{attachment.mime_type or '未知类型'} · "
+                f"{_format_size_bytes(attachment.size_bytes)}"
+            )
+            info.setObjectName("AttachmentInfo")
+            info.setWordWrap(True)
+            row_layout.addWidget(info, 1)
+            if self._is_transfer_image_attachment(attachment):
+                preview = QPushButton("预览")
+                preview.setObjectName("SubtleButton")
+                preview.clicked.connect(
+                    lambda checked=False, item=attachment: self._preview_transfer_image_attachment(
+                        item
+                    )
+                )
+                row_layout.addWidget(preview)
+            open_source = QPushButton("打开")
+            open_source.setObjectName("SubtleButton")
+            open_source.clicked.connect(
+                lambda checked=False, path=attachment.storage_path: self._open_local_path(
+                    path,
+                    status,
+                )
+            )
+            download = QPushButton("下载")
+            download.setObjectName("PrimaryButton")
+            download.setMinimumWidth(74)
+            download.clicked.connect(
+                lambda checked=False, item=attachment: self._download_dialog_attachment(
+                    conversation_id,
+                    item.id,
+                    status,
+                )
+            )
+            row_layout.addWidget(open_source)
+            row_layout.addWidget(download)
+            content_layout.addWidget(row)
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        layout.addWidget(status)
+        download_all.clicked.connect(
+            lambda: self._download_current_transfer_attachments(conversation_id)
+        )
+        close.clicked.connect(dialog.close)
+        self.transfer_attachments_dialog = dialog
+        dialog.show()
+
+    def _download_dialog_attachment(
+        self,
+        conversation_id: str,
+        attachment_id: str,
+        status: QLabel,
+    ) -> None:
+        record = self._download_transfer_attachment(conversation_id, attachment_id)
+        if record is None:
+            status.setText("下载失败：附件源文件不存在")
+            return
+        status.setText(f"已下载：{record.saved_path}")
+        self._show_toast(f"已下载 {record.filename}")
+        self._refresh_download_history()
+        self._show_download_history_dialog()
+
+    def _open_local_path(self, path: str, status: QLabel | None = None) -> None:
+        source = Path(path)
+        if not source.exists():
+            if status is not None:
+                status.setText("文件不存在，可能已被移动或删除")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(source)))
+
+    def _reveal_local_path(self, path: str, status: QLabel | None = None) -> None:
+        source = Path(path)
+        target = source if source.exists() else source.parent
+        if not target.exists():
+            if status is not None:
+                status.setText("文件和所在文件夹都不存在")
+            return
+        if source.exists():
+            Popen(["explorer", "/select,", str(source)])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
+    def _is_transfer_image_attachment(self, attachment) -> bool:
+        if attachment.mime_type.startswith("image/"):
+            return True
+        return Path(attachment.filename).suffix.casefold() in {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp",
+            ".gif",
+        }
+
+    def _first_transfer_image_attachment(self, conversation_id: str):
+        for attachment in self.service.list_transfer_attachments(conversation_id):
+            if self._is_transfer_image_attachment(attachment):
+                return attachment
+        return None
+
+    def _set_transfer_attachment_status(self, message: str) -> None:
+        self._show_toast(message)
+        if self.pages.currentWidget() == self.transfer_detail_page:
+            self.transfer_detail_notice.setText(message)
+            return
+        if self.pages.currentWidget() == self.transfer_chat_page:
+            self.transfer_chat_meta.setText(message)
+
+    def _format_transfer_attachments(self, conversation_id: str) -> str:
+        attachments = self.service.list_transfer_attachments(conversation_id)
+        if not attachments:
+            return "当前会话没有附件"
+        lines = ["附件列表"]
+        for attachment in attachments:
+            lines.append(
+                f"{attachment.filename} · {attachment.mime_type or '未知类型'} · "
+                f"{_format_size_bytes(attachment.size_bytes)}"
+            )
+        return "\n".join(lines)
+
+    def _transfer_message_attachment_label(
+        self,
+        conversation_id: str,
+        attachment_id: str,
+    ) -> str:
+        for attachment in self.service.list_transfer_attachments(conversation_id):
+            if attachment.id == attachment_id:
+                return f"[附件] {attachment.filename}"
+        return "[附件] 未知附件"
+
+    def _transfer_chat_meta(self, conversation_id: str) -> str:
+        conversation = self.service.get_transfer_conversation(conversation_id)
+        status_label = self._transfer_conversation_status_label(conversation)
+        meta = (
+            f"{conversation.device_name} · {status_label} · "
+            f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
+        )
+        if conversation.note_id:
+            meta = f"{meta} · 已转存为小纸条"
+        return meta
 
     def _update_data_status(
         self,
@@ -952,6 +2418,7 @@ class MainWindow(QMainWindow):
         list_widget.setItemWidget(item, EmptyListItem(text))
     def _refresh_trash(self) -> None:
         self.trash_list.clear()
+        self._apply_batch_mode("trash", self.trash_list)
         for summary in sorted_summaries(self.service.trash(), SortMode.UPDATED_DESC):
             item = QListWidgetItem()
             item.setSizeHint(QSize(0, 74))
@@ -959,7 +2426,222 @@ class MainWindow(QMainWindow):
             self.trash_list.addItem(item)
             self.trash_list.setItemWidget(item, RecordListItem(summary, "已移入回收站"))
 
+    def _refresh_download_history(self) -> None:
+        self.download_history_list.clear()
+        self._apply_batch_mode("download_history", self.download_history_list)
+        history = self.service.list_download_history()
+        if not history:
+            self.download_history_status.setText("下载历史为空")
+            self._add_empty_record_item(self.download_history_list, "当前没有下载记录")
+            return
+        status_lines: list[str] = []
+        for record in history:
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 74))
+            item.setData(Qt.ItemDataRole.UserRole, record.id)
+            self.download_history_list.addItem(item)
+            state = "文件存在" if record.exists else "文件不存在"
+            status_lines.append(f"{record.filename} · {state}")
+            summary = RecordSummary(
+                id=record.id,
+                type=RecordType.SECURE_NOTE,
+                name=record.filename,
+                account=record.saved_path,
+                category=state,
+                favorite=False,
+                created_at=record.downloaded_at,
+                updated_at=record.downloaded_at,
+            )
+            subtitle = f"{_format_size_bytes(record.size_bytes)} · {record.saved_path}"
+            self.download_history_list.setItemWidget(item, RecordListItem(summary, subtitle))
+        self.download_history_status.setText("\n".join(status_lines))
+
+    def _delete_selected_download_history(self) -> None:
+        items = self._selected_items(self.download_history_list)
+        if not items:
+            return
+        for item in items:
+            self.service.delete_download_history_record(item.data(Qt.ItemDataRole.UserRole))
+        self._exit_batch_mode("download_history", self.download_history_list)
+        self._refresh_download_history()
+        self._show_toast(f"已清除 {len(items)} 条下载记录")
+
+    def _open_selected_download_history(self) -> None:
+        item = self.download_history_list.currentItem()
+        if item is None and self.download_history_list.count() == 1:
+            item = self.download_history_list.item(0)
+        if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
+            return
+        record_id = item.data(Qt.ItemDataRole.UserRole)
+        record = next(
+            (entry for entry in self.service.list_download_history() if entry.id == record_id),
+            None,
+        )
+        if record is None:
+            self.download_history_status.setText("下载记录不存在")
+            return
+        status = QLabel()
+        self._open_local_path(record.saved_path, status)
+        if status.text():
+            self.download_history_status.setText(status.text())
+
+    def _show_download_history_context_menu(
+        self,
+        list_widget: QListWidget,
+        position,
+        refresh,
+        status: QLabel,
+    ) -> None:
+        item = list_widget.itemAt(position)
+        if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
+            return
+        list_widget.setCurrentItem(item)
+        record = self._download_history_record_from_item(item)
+        if record is None:
+            status.setText("下载记录不存在")
+            return
+        menu = QMenu(list_widget)
+        open_file = menu.addAction("打开文件")
+        reveal_file = menu.addAction("在资源管理器中打开")
+        remove_record = menu.addAction("清除记录")
+        action = menu.exec(list_widget.viewport().mapToGlobal(position))
+        if action == open_file:
+            self._open_local_path(record.saved_path, status)
+        elif action == reveal_file:
+            self._reveal_local_path(record.saved_path, status)
+        elif action == remove_record:
+            self.service.delete_download_history_record(record.id)
+            self._refresh_download_history()
+            refresh()
+
+    def _download_history_record_from_item(self, item: QListWidgetItem):
+        record_id = item.data(Qt.ItemDataRole.UserRole)
+        return next(
+            (entry for entry in self.service.list_download_history() if entry.id == record_id),
+            None,
+        )
+
+    def _clear_download_history(self) -> None:
+        self.service.clear_download_history()
+        self._refresh_download_history()
+        self._show_toast("已清空下载列表")
+
+    def _toggle_batch_mode(self, key: str, list_widget: QListWidget) -> None:
+        self.batch_modes[key] = not self.batch_modes.get(key, False)
+        self._apply_batch_mode(key, list_widget)
+        self._refresh_batch_buttons(key)
+
+    def _exit_batch_mode(self, key: str, list_widget: QListWidget) -> None:
+        self.batch_modes[key] = False
+        list_widget.clearSelection()
+        self._apply_batch_mode(key, list_widget)
+        self._refresh_batch_buttons(key)
+
+    def _apply_batch_mode(self, key: str, list_widget: QListWidget) -> None:
+        mode = (
+            QAbstractItemView.SelectionMode.MultiSelection
+            if self.batch_modes.get(key, False)
+            else QAbstractItemView.SelectionMode.SingleSelection
+        )
+        list_widget.setSelectionMode(mode)
+
+    def _refresh_batch_buttons(self, key: str) -> None:
+        enabled = self.batch_modes.get(key, False)
+        mapping = {
+            "accounts": (self.account_multi_button, self.account_delete_selected_button),
+            "notes": (self.note_multi_button, self.note_delete_selected_button),
+            "transfer": (self.transfer_multi_button, self.transfer_delete_selected_button),
+            "download_history": (self.download_history_multi_button, None),
+            "trash": (self.trash_multi_button, None),
+        }
+        toggle, delete_button = mapping[key]
+        toggle.setText("取消多选" if enabled else "多选")
+        if delete_button is not None:
+            delete_button.setVisible(enabled)
+        self._refresh_button_style(toggle)
+        if delete_button is not None:
+            self._refresh_button_style(delete_button)
+
+    def _selected_items(self, list_widget: QListWidget) -> list[QListWidgetItem]:
+        return [
+            item
+            for item in list_widget.selectedItems()
+            if item is not None and item.flags() != Qt.ItemFlag.NoItemFlags
+        ]
+
+    def _delete_selected_accounts(self) -> None:
+        items = self._selected_items(self.account_list)
+        if not items:
+            self._show_toast("请先选择账号记录")
+            return
+        for item in items:
+            record_id = item.data(Qt.ItemDataRole.UserRole)
+            self.service.delete_record(record_id)
+            if self.current_account_id == record_id:
+                self.current_account_id = ""
+        self._exit_batch_mode("accounts", self.account_list)
+        self._refresh_accounts()
+        self._show_toast(f"已删除 {len(items)} 条账号记录")
+
+    def _delete_selected_notes(self) -> None:
+        items = self._selected_items(self.note_list)
+        if not items:
+            self._show_toast("请先选择小纸条")
+            return
+        for item in items:
+            record_id = item.data(Qt.ItemDataRole.UserRole)
+            self.service.delete_record(record_id)
+            if self.current_note_id == record_id:
+                self.current_note_id = ""
+        self._exit_batch_mode("notes", self.note_list)
+        self._refresh_notes()
+        self._show_toast(f"已删除 {len(items)} 条小纸条")
+
+    def _delete_selected_transfer_conversations(self) -> None:
+        items = self._selected_items(self.transfer_list)
+        if not items:
+            self._show_toast("请先选择传输记录")
+            return
+        deleted = 0
+        skipped = 0
+        for item in items:
+            conversation_id = item.data(Qt.ItemDataRole.UserRole)
+            conversation = self.service.get_transfer_conversation(conversation_id)
+            if self._transfer_conversation_is_open(conversation):
+                skipped += 1
+                continue
+            self.service.delete_transfer_conversation(conversation_id)
+            deleted += 1
+            if self.current_transfer_id == conversation_id:
+                self.current_transfer_id = ""
+        self._exit_batch_mode("transfer", self.transfer_list)
+        self._refresh_transfer_conversations()
+        message = f"已删除 {deleted} 条传输记录"
+        if skipped:
+            message = f"{message}，{skipped} 条进行中会话已跳过"
+        self._show_toast(message)
+
+    def _delete_selected_trash_records(self) -> bool:
+        items = self._selected_items(self.trash_list)
+        if not items:
+            return False
+        reply = QMessageBox.question(
+            self,
+            "彻底删除",
+            f"确定彻底删除选中的 {len(items)} 条记录吗？",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return True
+        for item in items:
+            self.service.permanently_delete_record(item.data(Qt.ItemDataRole.UserRole))
+        self._exit_batch_mode("trash", self.trash_list)
+        self._refresh_trash()
+        self._show_toast(f"已彻底删除 {len(items)} 条记录")
+        return True
+
     def _open_account_item(self, item: QListWidgetItem) -> None:
+        if self.batch_modes.get("accounts"):
+            return
         self.current_account_id = item.data(Qt.ItemDataRole.UserRole)
         self._render_account_detail(self.service.get_record(self.current_account_id))
         self._remember_module_page("accounts", self.account_detail_page)
@@ -981,6 +2663,8 @@ class MainWindow(QMainWindow):
         self.account_note.setPlainText(record.note or "没有备注。")
 
     def _open_note_item(self, item: QListWidgetItem) -> None:
+        if self.batch_modes.get("notes"):
+            return
         self.current_note_id = item.data(Qt.ItemDataRole.UserRole)
         self._render_note_detail(self.service.get_record(self.current_note_id))
         self._remember_module_page("notes", self.note_detail_page)
@@ -1049,10 +2733,16 @@ class MainWindow(QMainWindow):
             self._refresh_notes()
 
     def _render_note_detail(self, record: Record) -> None:
+        self._loading_note_detail = True
         self.note_title_input.setText(record.name)
         self.note_category.setCurrentText(record.category)
+        self._apply_note_category_style(record.category)
         self.note_body.setHtml(record.note)
+        self._loading_note_detail = False
         self._show_note_source_info(record.note)
+        self.note_attachments_button.setVisible(
+            bool(self._transfer_conversation_for_note(record.id))
+        )
         self._set_note_edit_mode(False)
 
     def _add_account(self) -> None:
@@ -1116,7 +2806,7 @@ class MainWindow(QMainWindow):
     def _show_account_save_notice(self, text: str = "保存成功") -> None:
         self.account_save_notice.setText(text)
         self.account_save_notice.setVisible(True)
-        QTimer.singleShot(2000, lambda: self.account_save_notice.setVisible(False))
+        self._show_toast(text)
 
     def _new_note(self) -> None:
         note = self.service.create_secure_note(
@@ -1179,6 +2869,30 @@ class MainWindow(QMainWindow):
         self._refresh_notes()
         self._show_note_save_notice("保存成功")
 
+    def _save_current_note_category(self) -> None:
+        if self._loading_note_detail or not self.current_note_id:
+            return
+        record = self.service.get_record(self.current_note_id)
+        category = self.note_category.currentText().strip()
+        if not category or category == record.category:
+            return
+        updated = self.service.update_secure_note(
+            self.current_note_id,
+            name=record.name,
+            note=record.note,
+            category=category,
+        )
+        self._loading_note_detail = True
+        self.note_category.setCurrentText(updated.category)
+        self._apply_note_category_style(updated.category)
+        self._loading_note_detail = False
+        self._refresh_notes()
+        self._show_note_save_notice("分类已更新")
+
+    def _apply_note_category_style(self, category: str) -> None:
+        self.note_category.setObjectName(f"CategoryPillCombo_{_category_color_key(category)}")
+        self._refresh_button_style(self.note_category)
+
     def _enter_note_edit_mode(self) -> None:
         self._set_note_edit_mode(True)
 
@@ -1187,7 +2901,7 @@ class MainWindow(QMainWindow):
         if not editing:
             self.note_format_brush = None
         self.note_title_input.setReadOnly(not editing)
-        self.note_category.setEnabled(editing)
+        self.note_category.setEnabled(True)
         self.note_body.setReadOnly(not editing)
         self.note_save_button.setVisible(editing)
         self.note_edit_button.setVisible(not editing)
@@ -1196,8 +2910,27 @@ class MainWindow(QMainWindow):
 
     def _show_note_save_notice(self, text: str = "保存成功") -> None:
         self.note_save_notice.setText(text)
-        self.note_save_notice.setVisible(True)
-        QTimer.singleShot(2000, lambda: self.note_save_notice.setVisible(False))
+        self.note_save_notice.setVisible(False)
+        self._show_toast(text)
+
+    def _transfer_conversation_for_note(self, note_id: str):
+        for conversation in self.service.list_transfer_conversations():
+            if conversation.note_id == note_id:
+                return conversation
+        return None
+
+    def _show_current_note_attachments(self) -> None:
+        if not self.current_note_id:
+            return
+        conversation = self._transfer_conversation_for_note(self.current_note_id)
+        if conversation is None:
+            self._show_note_save_notice("当前纸条没有会话附件")
+            return
+        self.current_transfer_id = conversation.id
+        if not self.service.list_transfer_attachments(conversation.id):
+            self._show_note_save_notice("当前会话没有附件")
+            return
+        self._show_transfer_attachments_dialog(conversation.id)
 
     def _show_note_source_info(self, note: str) -> None:
         source = _note_source(note)
@@ -1384,6 +3117,8 @@ class MainWindow(QMainWindow):
         self._refresh_trash()
 
     def _delete_selected_trash_permanently(self) -> None:
+        if self.batch_modes.get("trash") and self._delete_selected_trash_records():
+            return
         item = self.trash_list.currentItem()
         if not item:
             return
@@ -1402,6 +3137,9 @@ class MainWindow(QMainWindow):
 
     def _lock(self) -> None:
         self._auto_sync_current_vault()
+        self.transfer_refresh_timer.stop()
+        self.transfer_pair_timer.stop()
+        self._stop_transfer_server(close_conversation=True)
         self.idle_timer.stop()
         self.service.lock()
         self.account_list.clear()
@@ -1409,12 +3147,28 @@ class MainWindow(QMainWindow):
         self._clear_account_fields()
         self.current_account_id = ""
         self.current_note_id = ""
+        self.current_transfer_id = ""
+        self.transfer_messages_signature = ""
         self._reset_module_pages()
         self._open_vault()
 
     def closeEvent(self, event) -> None:
         self._auto_sync_current_vault()
+        self._stop_transfer_server(close_conversation=True)
         super().closeEvent(event)
+
+    def _stop_transfer_server(self, *, close_conversation: bool = False) -> None:
+        if self.transfer_server is None:
+            return
+        self.transfer_pair_timer.stop()
+        conversation_id = self.transfer_server.conversation_id
+        self.transfer_server.stop()
+        if close_conversation and conversation_id and self.service.is_unlocked():
+            try:
+                self.service.close_transfer_conversation(conversation_id)
+            except KeyError:
+                pass
+        self.transfer_server = None
 
     def eventFilter(self, watched, event) -> bool:
         if (
@@ -1472,10 +3226,310 @@ class RecordListItem(QWidget):
         layout.addWidget(category, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
 
 
+class TransferMessageList(QListWidget):
+    noticeRequested = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._plain_text = ""
+        self._message_text_by_id: dict[str, str] = {}
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._copy_message_at_position)
+
+    def set_messages(
+        self,
+        messages,
+        attachments_by_id: dict[str, object],
+        *,
+        preview_attachment,
+        download_attachment,
+    ) -> None:
+        self.clear()
+        self._message_text_by_id = {}
+        blocks: list[str] = []
+        for message in messages:
+            sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            content = message.text
+            attachment_label = ""
+            attachment = attachments_by_id.get(message.attachment_id)
+            if message.kind in {TransferMessageKind.IMAGE, TransferMessageKind.FILE}:
+                filename = attachment.filename if attachment is not None else "未知附件"
+                attachment_label = "图片" if message.kind == TransferMessageKind.IMAGE else "文件"
+                content = f"[附件] {filename}"
+            blocks.append(f"{sender} {message.created_at}\n{content}")
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, message.id)
+            self._message_text_by_id[message.id] = content
+            message_item = TransferMessageItem(
+                sender=sender,
+                created_at=message.created_at,
+                text=content,
+                edited=False,
+                outbound=message.sender == TransferMessageSender.DESKTOP,
+                attachment_label=attachment_label,
+                attachment_id=message.attachment_id,
+                attachment=attachment,
+                can_preview=message.kind == TransferMessageKind.IMAGE,
+                preview_attachment=preview_attachment,
+                download_attachment=download_attachment,
+            )
+            message_item.noticeRequested.connect(lambda text: self.noticeRequested.emit(text))
+            item.setSizeHint(message_item.sizeHint() + QSize(0, 10))
+            self.addItem(item)
+            self.setItemWidget(item, message_item)
+        self._plain_text = "\n\n".join(blocks)
+
+    def setPlainText(self, text: str) -> None:
+        self.clear()
+        self._message_text_by_id = {}
+        self._plain_text = text
+
+    def toPlainText(self) -> str:
+        return self._plain_text
+
+    def selected_message_id(self) -> str:
+        item = self.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
+    def mousePressEvent(self, event) -> None:
+        item = self.itemAt(event.position().toPoint())
+        if (
+            item is not None
+            and item == self.currentItem()
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self.clearSelection()
+            self.setCurrentItem(None)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def _copy_message_at_position(self, position) -> None:
+        item = self.itemAt(position)
+        if item is None:
+            return
+        message_id = item.data(Qt.ItemDataRole.UserRole)
+        text = self._message_text_by_id.get(message_id, "").strip()
+        if text:
+            menu = QMenu(self)
+            copy_action = menu.addAction("复制整条消息")
+            action = menu.exec(self.viewport().mapToGlobal(position))
+            if action == copy_action:
+                QApplication.clipboard().setText(text)
+                self.noticeRequested.emit("已复制整条消息")
+
+
+class CopyableMessageLabel(QLabel):
+    noticeRequested = Signal(str)
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self._plain_text = text
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_copy_menu)
+
+    def set_plain_text(self, text: str) -> None:
+        self._plain_text = text
+
+    def _show_copy_menu(self, position) -> None:
+        selected_text = self.selectedText().strip()
+        text = selected_text or self._plain_text.strip()
+        if not text:
+            return
+        menu = QMenu(self)
+        action = menu.addAction("复制选中文字" if selected_text else "复制整条消息")
+        chosen = menu.exec(self.mapToGlobal(position))
+        if chosen == action:
+            QApplication.clipboard().setText(text)
+            self.noticeRequested.emit("已复制选中文字" if selected_text else "已复制整条消息")
+
+
+class TransferMessageItem(QWidget):
+    noticeRequested = Signal(str)
+
+    def __init__(
+        self,
+        *,
+        sender: str,
+        created_at: str,
+        text: str,
+        edited: bool,
+        outbound: bool,
+        attachment_label: str = "",
+        attachment_id: str = "",
+        attachment=None,
+        can_preview: bool = False,
+        preview_attachment=None,
+        download_attachment=None,
+    ) -> None:
+        super().__init__()
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(10)
+        bubble = QFrame()
+        bubble.setObjectName("TransferBubbleDesktop" if outbound else "TransferBubblePhone")
+        bubble.setMaximumWidth(520)
+        layout = QVBoxLayout(bubble)
+        layout.setContentsMargins(14, 9, 14, 10)
+        layout.setSpacing(5)
+        meta = QLabel(f"{sender} {created_at}")
+        meta.setObjectName("TransferBubbleMeta")
+        meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        meta.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        attachment_name = text.removeprefix("[附件] ").strip()
+        body_text = attachment_name if attachment_label else text
+        body = CopyableMessageLabel(body_text)
+        body.setObjectName("TransferBubbleText")
+        body.setWordWrap(True)
+        body.set_plain_text(text)
+        body.noticeRequested.connect(lambda text: self.noticeRequested.emit(text))
+        layout.addWidget(meta)
+        if attachment_label and attachment is not None and can_preview:
+            source = Path(attachment.storage_path)
+            pixmap = QPixmap(str(source)) if source.exists() else QPixmap()
+            if not pixmap.isNull():
+                image = QLabel()
+                image.setObjectName("TransferImagePreview")
+                image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                image.setPixmap(
+                    pixmap.scaled(
+                        240,
+                        180,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                image.setCursor(Qt.CursorShape.PointingHandCursor)
+                image.mousePressEvent = (
+                    lambda event, aid=attachment_id: preview_attachment
+                    and preview_attachment(aid)
+                )
+                layout.addWidget(image)
+        layout.addWidget(body)
+        if attachment_label and attachment_id:
+            actions = QHBoxLayout()
+            actions.setContentsMargins(0, 4, 0, 0)
+            actions.setSpacing(8)
+            if can_preview:
+                preview = QPushButton("预览")
+                preview.setObjectName("SubtleButton")
+                preview.setMinimumHeight(32)
+                preview.setMinimumWidth(70)
+                preview.clicked.connect(
+                    lambda: preview_attachment and preview_attachment(attachment_id)
+                )
+                actions.addWidget(preview)
+            download = QPushButton("下载")
+            download.setObjectName("SubtleButton")
+            download.setMinimumHeight(32)
+            download.setMinimumWidth(70)
+            download.clicked.connect(
+                lambda: download_attachment and download_attachment(attachment_id)
+            )
+            actions.addWidget(download)
+            actions.addStretch()
+            layout.addLayout(actions)
+        if outbound:
+            outer.addStretch(1)
+            outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight)
+        else:
+            outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+            outer.addStretch(1)
+
+
 def _category_color_key(category: str) -> str:
+    fixed_colors = {
+        "邮箱": "Blue",
+        "学校": "Mint",
+        "工作": "Sky",
+        "游戏": "Lavender",
+        "生活": "Pink",
+        "软件": "Cyan",
+        "收件箱": "Blue",
+        "会话": "Lavender",
+        "MD": "Mint",
+        "TXT": "Cyan",
+        "其他": "Peach",
+        "进行中": "Mint",
+        "待整理": "Sky",
+        "已转存": "Lavender",
+        "已关闭": "Peach",
+        "已关闭 · 已转存": "Lavender",
+    }
+    if category in fixed_colors:
+        return fixed_colors[category]
     palette = ["Blue", "Pink", "Cyan", "Mint", "Lavender", "Peach", "Sky"]
     index = sum(ord(ch) for ch in category) % len(palette)
     return palette[index]
+
+
+def _transfer_status_label(status: str) -> str:
+    labels = {
+        "active": "进行中",
+        "closed": "已关闭",
+        "pending_review": "待整理",
+        "transferred": "已转存",
+    }
+    return labels.get(status, status)
+
+
+def _format_size_bytes(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / 1024 / 1024:.1f} MB"
+
+
+def _unique_local_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    index = 1
+    while True:
+        candidate = parent / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _guess_mime_type(path: Path) -> str:
+    suffix = path.suffix.casefold()
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+        ".txt": "text/plain",
+        ".csv": "text/csv",
+        ".json": "application/json",
+        ".zip": "application/zip",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }.get(suffix, "application/octet-stream")
+
+
+def _record_search_text(record: Record) -> str:
+    return " ".join(
+        [
+            record.name,
+            record.account,
+            record.category,
+            record.note,
+            record.entry_hint,
+        ]
+    ).casefold()
 
 
 def _with_note_source(note_html: str, source: str) -> str:
@@ -1492,4 +3546,8 @@ def _note_source(note_html: str) -> str:
     if source_end < 0:
         return ""
     return note_html[source_start:source_end].strip()
+
+
+def _now_local() -> str:
+    return datetime.now(UTC).astimezone().isoformat(timespec="seconds")
 

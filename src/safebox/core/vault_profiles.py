@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from safebox.core.settings import APP_DIR_NAME
@@ -14,6 +14,7 @@ class VaultProfileSettings:
     backup_dir: str = ""
     auto_sync_on_close: bool = True
     auto_lock_seconds: int = 300
+    trusted_transfer_devices: list[dict[str, str]] = field(default_factory=list)
 
 
 def app_data_dir() -> Path:
@@ -47,6 +48,15 @@ def load_profile_settings(base_dir: Path, name: str) -> VaultProfileSettings:
         backup_dir=str(data.get("backup_dir", "")),
         auto_sync_on_close=bool(data.get("auto_sync_on_close", True)),
         auto_lock_seconds=int(data.get("auto_lock_seconds", 300)),
+        trusted_transfer_devices=[
+            {
+                "id": str(item.get("id", "")),
+                "name": str(item.get("name", "")),
+                "last_connected_at": str(item.get("last_connected_at", "")),
+            }
+            for item in data.get("trusted_transfer_devices", [])
+            if isinstance(item, dict) and item.get("id") and item.get("name")
+        ],
     )
 
 
@@ -59,6 +69,7 @@ def save_profile_settings(base_dir: Path, name: str, settings: VaultProfileSetti
                 "backup_dir": settings.backup_dir,
                 "auto_sync_on_close": settings.auto_sync_on_close,
                 "auto_lock_seconds": settings.auto_lock_seconds,
+                "trusted_transfer_devices": settings.trusted_transfer_devices,
             },
             ensure_ascii=False,
             indent=2,
