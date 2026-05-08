@@ -256,6 +256,48 @@ def test_transfer_server_rejects_message_list_before_pairing(vault_path) -> None
     assert status == 403
 
 
+def test_transfer_server_closes_conversation_from_paired_phone(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        result = _request_json(f"{server.url}/api/close", {})
+        blocked_status = _request_error_code(
+            f"{server.url}/api/messages",
+            {"text": "关闭后不应该写入"},
+        )
+    finally:
+        server.stop()
+
+    conversation = service.get_transfer_conversation(server.conversation_id)
+
+    assert result == {"ok": True, "status": "closed"}
+    assert conversation.status.value == "closed"
+    assert conversation.closed_at
+    assert blocked_status == 400
+    assert service.list_transfer_messages(server.conversation_id) == []
+
+
+def test_transfer_server_rejects_close_before_pairing(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        status = _request_error_code(f"{server.url}/api/close", {})
+    finally:
+        server.stop()
+
+    conversation = service.get_transfer_conversation(server.conversation_id)
+
+    assert status == 403
+    assert conversation.status.value == "active"
+
+
 def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")

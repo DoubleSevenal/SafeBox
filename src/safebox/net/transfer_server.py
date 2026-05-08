@@ -105,6 +105,7 @@ MOBILE_PAGE = """<!doctype html>
         <input id="file" type="file">
       </label>
       <button onclick="uploadFile()">上传附件</button>
+      <button onclick="closeConversation()">结束会话</button>
     </div>
     <div id="messages" class="messages"></div>
     <div id="status"></div>
@@ -141,6 +142,10 @@ MOBILE_PAGE = """<!doctype html>
       const response = await fetch('/api/uploads', { method: 'POST', body: data });
       document.getElementById('status').textContent = response.ok ? '已上传' : '上传失败';
       if (response.ok) document.getElementById('file').value = '';
+    }
+    async function closeConversation() {
+      const response = await fetch('/api/close', { method: 'POST' });
+      document.getElementById('status').textContent = response.ok ? '会话已结束' : '结束失败';
     }
     async function loadMessages() {
       const response = await fetch('/api/messages');
@@ -266,6 +271,9 @@ class TransferHttpServer:
                 if self.path == "/api/uploads":
                     self._handle_upload_post()
                     return
+                if self.path == "/api/close":
+                    self._handle_close_post()
+                    return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def _handle_pair_post(self) -> None:
@@ -304,6 +312,18 @@ class TransferHttpServer:
                     )
                 self._send_json(HTTPStatus.OK, {"ok": True, "messages": messages})
 
+            def _handle_close_post(self) -> None:
+                if not owner.paired:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "pair_required"})
+                    return
+                conversation = owner.service.close_transfer_conversation(
+                    owner.conversation_id
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True, "status": conversation.status.value},
+                )
+
             def _handle_message_post(self) -> None:
                 if not owner.paired:
                     self._send_json(HTTPStatus.FORBIDDEN, {"error": "pair_required"})
@@ -313,11 +333,15 @@ class TransferHttpServer:
                 if not text:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "text_required"})
                     return
-                message = owner.service.add_transfer_text_message(
-                    owner.conversation_id,
-                    sender=TransferMessageSender.PHONE,
-                    text=text,
-                )
+                try:
+                    message = owner.service.add_transfer_text_message(
+                        owner.conversation_id,
+                        sender=TransferMessageSender.PHONE,
+                        text=text,
+                    )
+                except ValueError as exc:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
                 self._send_json(HTTPStatus.OK, {"ok": True, "message_id": message.id})
 
             def _handle_upload_post(self) -> None:
@@ -344,15 +368,19 @@ class TransferHttpServer:
                     if mime_type.startswith("image/")
                     else TransferMessageKind.FILE
                 )
-                message, attachment = owner.service.add_transfer_attachment_message(
-                    owner.conversation_id,
-                    sender=TransferMessageSender.PHONE,
-                    kind=kind,
-                    filename=filename,
-                    mime_type=mime_type,
-                    size_bytes=len(content),
-                    storage_path=str(target),
-                )
+                try:
+                    message, attachment = owner.service.add_transfer_attachment_message(
+                        owner.conversation_id,
+                        sender=TransferMessageSender.PHONE,
+                        kind=kind,
+                        filename=filename,
+                        mime_type=mime_type,
+                        size_bytes=len(content),
+                        storage_path=str(target),
+                    )
+                except ValueError as exc:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
                 self._send_json(
                     HTTPStatus.OK,
                     {
