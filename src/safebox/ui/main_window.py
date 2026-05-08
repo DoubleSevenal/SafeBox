@@ -1394,12 +1394,12 @@ class MainWindow(QMainWindow):
 
     def _render_transfer_messages(self, conversation_id: str) -> None:
         messages = self.service.list_transfer_messages(conversation_id)
+        attachments = self.service.list_transfer_attachments(conversation_id)
         self.transfer_messages_view.set_messages(
             messages,
-            {
-                attachment.id: attachment.filename
-                for attachment in self.service.list_transfer_attachments(conversation_id)
-            },
+            {attachment.id: attachment.filename for attachment in attachments},
+            preview_attachment=self._preview_transfer_attachment_by_id,
+            download_attachment=self._download_transfer_attachment_by_id,
         )
 
     def _show_current_transfer_attachments(self) -> None:
@@ -1432,6 +1432,32 @@ class MainWindow(QMainWindow):
             )
         else:
             self.transfer_detail_notice.setText(message)
+
+    def _download_transfer_attachment_by_id(self, attachment_id: str) -> None:
+        if not self.current_transfer_id:
+            return
+        attachment = self.service.download_transfer_attachment(
+            conversation_id=self.current_transfer_id,
+            attachment_id=attachment_id,
+            download_dir=self.settings.transfer_download_dir,
+        )
+        self._set_transfer_attachment_status(f"已下载 {attachment.filename}")
+
+    def _preview_transfer_attachment_by_id(self, attachment_id: str) -> None:
+        if not self.current_transfer_id:
+            return
+        attachment = next(
+            (
+                item
+                for item in self.service.list_transfer_attachments(self.current_transfer_id)
+                if item.id == attachment_id
+            ),
+            None,
+        )
+        if attachment is None:
+            self._set_transfer_attachment_status("附件不存在")
+            return
+        self._preview_transfer_image_attachment(attachment)
 
     def _preview_first_transfer_image(self) -> None:
         if not self.current_transfer_id:
@@ -2150,6 +2176,9 @@ class TransferMessageList(QListWidget):
         self,
         messages,
         attachment_names: dict[str, str],
+        *,
+        preview_attachment,
+        download_attachment,
     ) -> None:
         self.clear()
         blocks: list[str] = []
@@ -2176,6 +2205,10 @@ class TransferMessageList(QListWidget):
                     edited=bool(message.edited_at),
                     outbound=message.sender == TransferMessageSender.DESKTOP,
                     attachment_label=attachment_label,
+                    attachment_id=message.attachment_id,
+                    can_preview=message.kind == TransferMessageKind.IMAGE,
+                    preview_attachment=preview_attachment,
+                    download_attachment=download_attachment,
                 ),
             )
         self._plain_text = "\n\n".join(blocks)
@@ -2202,6 +2235,10 @@ class TransferMessageItem(QWidget):
         edited: bool,
         outbound: bool,
         attachment_label: str = "",
+        attachment_id: str = "",
+        can_preview: bool = False,
+        preview_attachment=None,
+        download_attachment=None,
     ) -> None:
         super().__init__()
         outer = QHBoxLayout(self)
@@ -2226,6 +2263,25 @@ class TransferMessageItem(QWidget):
         body.setWordWrap(True)
         layout.addWidget(meta)
         layout.addWidget(body)
+        if attachment_label and attachment_id:
+            actions = QHBoxLayout()
+            actions.setContentsMargins(0, 4, 0, 0)
+            actions.setSpacing(8)
+            if can_preview:
+                preview = QPushButton("预览")
+                preview.setObjectName("SubtleButton")
+                preview.clicked.connect(
+                    lambda: preview_attachment and preview_attachment(attachment_id)
+                )
+                actions.addWidget(preview)
+            download = QPushButton("下载")
+            download.setObjectName("SubtleButton")
+            download.clicked.connect(
+                lambda: download_attachment and download_attachment(attachment_id)
+            )
+            actions.addWidget(download)
+            actions.addStretch()
+            layout.addLayout(actions)
         if outbound:
             outer.addStretch(1)
             outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight)
