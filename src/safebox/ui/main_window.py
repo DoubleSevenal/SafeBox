@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -113,6 +112,9 @@ class MainWindow(QMainWindow):
         self.transfer_refresh_timer = QTimer(self)
         self.transfer_refresh_timer.setInterval(1000)
         self.transfer_refresh_timer.timeout.connect(self._refresh_active_transfer_chat)
+        self.transfer_pair_timer = QTimer(self)
+        self.transfer_pair_timer.setInterval(800)
+        self.transfer_pair_timer.timeout.connect(self._check_transfer_pairing)
         self.setWindowTitle("SafeBox")
         self._build_ui()
         self.installEventFilter(self)
@@ -189,6 +191,7 @@ class MainWindow(QMainWindow):
         self.notes_page = self._build_notes_page()
         self.note_detail_page = self._build_note_detail_page()
         self.transfer_page = self._build_transfer_page()
+        self.transfer_connect_page = self._build_transfer_connect_page()
         self.transfer_detail_page = self._build_transfer_detail_page()
         self.transfer_chat_page = self._build_transfer_chat_page()
         self.trash_page = self._build_trash_page()
@@ -200,6 +203,7 @@ class MainWindow(QMainWindow):
             self.notes_page,
             self.note_detail_page,
             self.transfer_page,
+            self.transfer_connect_page,
             self.transfer_detail_page,
             self.transfer_chat_page,
             self.trash_page,
@@ -404,6 +408,53 @@ class MainWindow(QMainWindow):
         self.connect_phone_button.clicked.connect(self._show_connect_phone_placeholder)
         return page
 
+    def _build_transfer_connect_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        top = QHBoxLayout()
+        back = QPushButton("返回列表")
+        back.setObjectName("SubtleButton")
+        self.transfer_connect_title = QLabel("连接手机")
+        self.transfer_connect_title.setObjectName("HeroTitle")
+        self.transfer_connect_meta = QLabel("让手机和电脑连接同一个 WiFi，或手机给电脑开热点。")
+        self.transfer_connect_meta.setObjectName("HeroMeta")
+        self.transfer_connect_info = QLabel("")
+        self.transfer_connect_info.setObjectName("DataStatus")
+        self.transfer_connect_info.setWordWrap(True)
+        self.transfer_connect_copy_button = QPushButton("复制链接和验证码")
+        self.transfer_connect_copy_button.setObjectName("PrimaryButton")
+        self.transfer_connect_status = QLabel("等待手机输入验证码。")
+        self.transfer_connect_status.setObjectName("DataStatus")
+        self.transfer_connect_status.setWordWrap(True)
+        hero = QFrame()
+        hero.setObjectName("DetailHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(20, 16, 20, 16)
+        hero_layout.addWidget(self.transfer_connect_title)
+        hero_layout.addWidget(self.transfer_connect_meta)
+        guide = QFrame()
+        guide.setObjectName("SettingsCard")
+        guide_layout = QVBoxLayout(guide)
+        guide_layout.setContentsMargins(18, 16, 18, 16)
+        guide_layout.setSpacing(12)
+        guide_layout.addWidget(QLabel("1. 手机打开下面的访问地址。"))
+        guide_layout.addWidget(QLabel("2. 输入验证码完成连接。"))
+        guide_layout.addWidget(QLabel("3. 验证成功后电脑会自动进入聊天窗口。"))
+        guide_layout.addWidget(self.transfer_connect_info)
+        guide_layout.addWidget(self.transfer_connect_copy_button)
+        top.addWidget(back)
+        top.addStretch()
+        layout.addLayout(top)
+        layout.addWidget(hero)
+        layout.addWidget(guide)
+        layout.addWidget(self.transfer_connect_status)
+        layout.addStretch()
+
+        back.clicked.connect(self._show_transfer_list_page)
+        self.transfer_connect_copy_button.clicked.connect(self._copy_transfer_link)
+        return page
+
     def _build_transfer_detail_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -461,11 +512,9 @@ class MainWindow(QMainWindow):
         show_attachments_action = self.transfer_organize_menu.addAction("查看附件")
         preview_image_action = self.transfer_organize_menu.addAction("预览图片")
         download_attachments_action = self.transfer_organize_menu.addAction("下载全部附件")
-        close_chat_action = self.transfer_organize_menu.addAction("关闭此次对话")
         self.transfer_organize_button.setMenu(self.transfer_organize_menu)
         self.transfer_close_button = QPushButton("关闭此次对话")
-        self.transfer_close_button.setObjectName("SubtleButton")
-        self.transfer_close_button.setVisible(False)
+        self.transfer_close_button.setObjectName("DangerButton")
         self.transfer_chat_title = QLabel("手机对话")
         self.transfer_chat_title.setObjectName("HeroTitle")
         self.transfer_chat_meta = QLabel("")
@@ -489,8 +538,6 @@ class MainWindow(QMainWindow):
         self.transfer_send_button.setObjectName("PrimaryButton")
         self.transfer_send_file_button = QPushButton("发送文件")
         self.transfer_send_file_button.setObjectName("SubtleButton")
-        self.transfer_edit_last_button = QPushButton("编辑消息")
-        self.transfer_edit_last_button.setObjectName("SubtleButton")
         hero = QFrame()
         hero.setObjectName("DetailHero")
         hero_layout = QVBoxLayout(hero)
@@ -500,7 +547,6 @@ class MainWindow(QMainWindow):
         hero_layout.addLayout(connection_row)
         input_row = QHBoxLayout()
         input_row.addWidget(self.transfer_message_input, 1)
-        input_row.addWidget(self.transfer_edit_last_button)
         input_row.addWidget(self.transfer_send_file_button)
         input_row.addWidget(self.transfer_send_button)
         top.addWidget(back)
@@ -517,11 +563,9 @@ class MainWindow(QMainWindow):
         show_attachments_action.triggered.connect(self._show_current_transfer_attachments)
         preview_image_action.triggered.connect(self._preview_first_transfer_image)
         download_attachments_action.triggered.connect(self._download_current_transfer_attachments)
-        close_chat_action.triggered.connect(self._close_current_transfer_chat)
         self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
         self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
         self.transfer_send_file_button.clicked.connect(self._send_current_transfer_file)
-        self.transfer_edit_last_button.clicked.connect(self._edit_last_transfer_text)
         self.transfer_copy_link_button.clicked.connect(self._copy_transfer_link)
         return page
 
@@ -985,6 +1029,7 @@ class MainWindow(QMainWindow):
 
     def _show_transfer_list_page(self) -> None:
         self.transfer_refresh_timer.stop()
+        self.transfer_pair_timer.stop()
         self.transfer_messages_signature = ""
         self._remember_module_page("transfer", self.transfer_page)
         self._set_nav("transfer")
@@ -1297,14 +1342,37 @@ class MainWindow(QMainWindow):
             "等待手机验证后即可互发文字、图片和文件。"
         )
         self.transfer_status.setVisible(True)
-        self.transfer_chat_connection.setText(
+        self.current_transfer_id = self.transfer_server.conversation_id
+        self.transfer_connect_info.setText(
             f"手机访问：{self.transfer_server.display_url}\n"
-            f"验证码：{self.transfer_server.verification_code}\n"
-            "等待手机验证后即可开始传输。"
+            f"验证码：{self.transfer_server.verification_code}"
         )
-        self.transfer_chat_connection.setVisible(True)
-        self.transfer_copy_link_button.setVisible(True)
-        self._show_transfer_chat(self.transfer_server.conversation_id)
+        self.transfer_connect_status.setText("等待手机输入验证码。")
+        self._remember_module_page("transfer", self.transfer_connect_page)
+        self._set_nav("transfer")
+        self.pages.setCurrentWidget(self.transfer_connect_page)
+        self.transfer_pair_timer.start()
+
+    def _check_transfer_pairing(self) -> None:
+        if self.transfer_server is None:
+            self.transfer_pair_timer.stop()
+            return
+        try:
+            conversation = self.service.get_transfer_conversation(
+                self.transfer_server.conversation_id
+            )
+        except KeyError:
+            self.transfer_pair_timer.stop()
+            return
+        if not self._transfer_conversation_is_open(conversation):
+            self.transfer_pair_timer.stop()
+            self.transfer_connect_status.setText("此次连接已关闭。")
+            return
+        if not self.transfer_server.paired:
+            self.transfer_connect_status.setText("等待手机输入验证码。")
+            return
+        self.transfer_pair_timer.stop()
+        self._show_transfer_chat(conversation.id)
 
     def _show_transfer_chat(self, conversation_id: str) -> None:
         if self.current_transfer_id != conversation_id:
@@ -1324,7 +1392,7 @@ class MainWindow(QMainWindow):
         self.transfer_message_input.setEnabled(writable)
         self.transfer_send_button.setEnabled(writable)
         self.transfer_send_file_button.setEnabled(writable)
-        self.transfer_edit_last_button.setEnabled(writable)
+        self.transfer_close_button.setVisible(writable)
         self._remember_module_page("transfer", self.transfer_chat_page)
         self._set_nav("transfer")
         self.pages.setCurrentWidget(self.transfer_chat_page)
@@ -1408,54 +1476,6 @@ class MainWindow(QMainWindow):
         )
         self._show_transfer_chat(self.current_transfer_id)
 
-    def _edit_last_transfer_text(self) -> None:
-        if not self.current_transfer_id:
-            return
-        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-        if not self._transfer_conversation_is_open(conversation):
-            return
-        text = self.transfer_message_input.toPlainText().strip()
-        if not text:
-            return
-        messages = [
-            message
-            for message in self.service.list_transfer_messages(self.current_transfer_id)
-            if message.kind == TransferMessageKind.TEXT
-        ]
-        if not messages:
-            return
-        selected_id = self.transfer_messages_view.selected_message_id()
-        if selected_id and any(message.id == selected_id for message in messages):
-            target_message_id = selected_id
-        else:
-            target_message_id = ""
-            message_by_label: dict[str, str] = {}
-            labels: list[str] = []
-            for message in messages:
-                sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
-                preview = message.text.replace("\n", " ")[:28]
-                label = f"{sender} {preview}"
-                labels.append(label)
-                message_by_label[label] = message.id
-            selected, accepted = QInputDialog.getItem(
-                self,
-                "编辑消息",
-                "选择要编辑的文本消息",
-                labels,
-                len(labels) - 1,
-                False,
-            )
-            if not accepted or not selected:
-                return
-            target_message_id = message_by_label[selected]
-        self.service.edit_transfer_text_message(
-            self.current_transfer_id,
-            target_message_id,
-            text=text,
-        )
-        self.transfer_message_input.clear()
-        self._show_transfer_chat(self.current_transfer_id)
-
     def _copy_transfer_link(self) -> None:
         if self.transfer_server is None:
             return
@@ -1468,6 +1488,12 @@ class MainWindow(QMainWindow):
             f"验证码：{self.transfer_server.verification_code}\n"
             "链接已复制，验证码请手动输入到手机页面。"
         )
+        if self.pages.currentWidget() == self.transfer_connect_page:
+            self.transfer_connect_info.setText(
+                f"手机访问：{self.transfer_server.display_url}\n"
+                f"验证码：{self.transfer_server.verification_code}\n"
+                "链接和验证码已复制。"
+            )
 
     def _refresh_transfer_connection_status(self, conversation) -> None:
         if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
@@ -2373,6 +2399,7 @@ class MainWindow(QMainWindow):
     def _lock(self) -> None:
         self._auto_sync_current_vault()
         self.transfer_refresh_timer.stop()
+        self.transfer_pair_timer.stop()
         self._stop_transfer_server(close_conversation=True)
         self.idle_timer.stop()
         self.service.lock()
@@ -2394,6 +2421,7 @@ class MainWindow(QMainWindow):
     def _stop_transfer_server(self, *, close_conversation: bool = False) -> None:
         if self.transfer_server is None:
             return
+        self.transfer_pair_timer.stop()
         conversation_id = self.transfer_server.conversation_id
         self.transfer_server.stop()
         if close_conversation and conversation_id and self.service.is_unlocked():
@@ -2487,23 +2515,21 @@ class TransferMessageList(QListWidget):
             blocks.append(f"{sender} {message.created_at}{edited_label}\n{content}")
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, message.id)
-            item.setSizeHint(QSize(0, max(82, 58 + (len(content) // 32) * 22)))
-            self.addItem(item)
-            self.setItemWidget(
-                item,
-                TransferMessageItem(
-                    sender=sender,
-                    created_at=message.created_at,
-                    text=content,
-                    edited=bool(message.edited_at),
-                    outbound=message.sender == TransferMessageSender.DESKTOP,
-                    attachment_label=attachment_label,
-                    attachment_id=message.attachment_id,
-                    can_preview=message.kind == TransferMessageKind.IMAGE,
-                    preview_attachment=preview_attachment,
-                    download_attachment=download_attachment,
-                ),
+            message_item = TransferMessageItem(
+                sender=sender,
+                created_at=message.created_at,
+                text=content,
+                edited=bool(message.edited_at),
+                outbound=message.sender == TransferMessageSender.DESKTOP,
+                attachment_label=attachment_label,
+                attachment_id=message.attachment_id,
+                can_preview=message.kind == TransferMessageKind.IMAGE,
+                preview_attachment=preview_attachment,
+                download_attachment=download_attachment,
             )
+            item.setSizeHint(message_item.sizeHint() + QSize(0, 10))
+            self.addItem(item)
+            self.setItemWidget(item, message_item)
         self._plain_text = "\n\n".join(blocks)
 
     def setPlainText(self, text: str) -> None:
@@ -2563,12 +2589,16 @@ class TransferMessageItem(QWidget):
             if can_preview:
                 preview = QPushButton("预览")
                 preview.setObjectName("SubtleButton")
+                preview.setMinimumHeight(32)
+                preview.setMinimumWidth(70)
                 preview.clicked.connect(
                     lambda: preview_attachment and preview_attachment(attachment_id)
                 )
                 actions.addWidget(preview)
             download = QPushButton("下载")
             download.setObjectName("SubtleButton")
+            download.setMinimumHeight(32)
+            download.setMinimumWidth(70)
             download.clicked.connect(
                 lambda: download_attachment and download_attachment(attachment_id)
             )
