@@ -14,6 +14,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -1557,7 +1558,12 @@ class MainWindow(QMainWindow):
     def _refresh_transfer_connection_status(self, conversation) -> None:
         if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
             return
-        pair_status = "手机已验证连接" if self.transfer_server.paired else "等待手机验证"
+        if self.transfer_server.paired:
+            self.transfer_chat_connection.setText("")
+            self.transfer_chat_connection.setVisible(False)
+            self.transfer_copy_link_button.setVisible(False)
+            return
+        pair_status = "等待手机验证"
         self.transfer_chat_connection.setText(
             f"手机访问：{self.transfer_server.display_url}\n"
             f"验证码：{self.transfer_server.verification_code}\n"
@@ -2557,7 +2563,10 @@ class TransferMessageList(QListWidget):
     def __init__(self) -> None:
         super().__init__()
         self._plain_text = ""
+        self._message_text_by_id: dict[str, str] = {}
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._copy_message_at_position)
 
     def set_messages(
         self,
@@ -2568,6 +2577,7 @@ class TransferMessageList(QListWidget):
         download_attachment,
     ) -> None:
         self.clear()
+        self._message_text_by_id = {}
         blocks: list[str] = []
         for message in messages:
             sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
@@ -2581,6 +2591,7 @@ class TransferMessageList(QListWidget):
             blocks.append(f"{sender} {message.created_at}{edited_label}\n{content}")
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, message.id)
+            self._message_text_by_id[message.id] = content
             message_item = TransferMessageItem(
                 sender=sender,
                 created_at=message.created_at,
@@ -2600,6 +2611,7 @@ class TransferMessageList(QListWidget):
 
     def setPlainText(self, text: str) -> None:
         self.clear()
+        self._message_text_by_id = {}
         self._plain_text = text
 
     def toPlainText(self) -> str:
@@ -2608,6 +2620,28 @@ class TransferMessageList(QListWidget):
     def selected_message_id(self) -> str:
         item = self.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
+    def mousePressEvent(self, event) -> None:
+        item = self.itemAt(event.position().toPoint())
+        if (
+            item is not None
+            and item == self.currentItem()
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self.clearSelection()
+            self.setCurrentItem(None)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def _copy_message_at_position(self, position) -> None:
+        item = self.itemAt(position)
+        if item is None:
+            return
+        message_id = item.data(Qt.ItemDataRole.UserRole)
+        text = self._message_text_by_id.get(message_id, "").strip()
+        if text:
+            QApplication.clipboard().setText(text)
 
 
 class TransferMessageItem(QWidget):

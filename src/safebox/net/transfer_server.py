@@ -89,6 +89,20 @@ MOBILE_PAGE = """<!doctype html>
       color: inherit;
       text-decoration: none;
     }
+    .image-card {
+      display: block;
+      max-width: min(260px, 70vw);
+      color: inherit;
+      text-decoration: none;
+    }
+    .image-preview {
+      display: block;
+      max-width: 100%;
+      max-height: 220px;
+      border-radius: 8px;
+      object-fit: contain;
+      background: rgba(255,255,255,.55);
+    }
     .file-name { font-weight: 700; margin-bottom: 4px; }
     .file-meta { color: #617086; font-size: 12px; }
     footer {
@@ -159,6 +173,7 @@ MOBILE_PAGE = """<!doctype html>
       color: #172033;
       font-weight: 700;
     }
+    .file-label.disabled { opacity: .55; pointer-events: none; }
     .file-label input { display: none; }
     #status { color: #475569; font-size: 13px; min-height: 18px; }
   </style>
@@ -186,15 +201,16 @@ MOBILE_PAGE = """<!doctype html>
       <div class="tools">
         <label class="file-label">
           选择文件
-          <input id="file" type="file" onchange="uploadFile()">
+          <input id="file" type="file" onchange="uploadSelectedFile()">
         </label>
-        <button class="secondary" onclick="uploadFile()">上传附件</button>
         <div id="status"></div>
       </div>
     </footer>
   </main>
   <script>
     let paired = false;
+    let lastMessagesSignature = '';
+    let messagesLoading = false;
 
     function setPaired(nextPaired) {
       paired = nextPaired;
@@ -204,6 +220,9 @@ MOBILE_PAGE = """<!doctype html>
     function setWritable(writable) {
       document.getElementById('text').disabled = !writable;
       document.getElementById('file').disabled = !writable;
+      document.querySelector('.file-label').className = writable
+        ? 'file-label'
+        : 'file-label disabled';
       for (const button of document.querySelectorAll('button')) {
         if (button.textContent !== '验证') button.disabled = !writable;
       }
@@ -233,10 +252,11 @@ MOBILE_PAGE = """<!doctype html>
       const response = await fetch('/api/session');
       if (!response.ok) return;
       const session = await response.json();
+      const wasPaired = paired;
       setPaired(session.paired);
       setSessionState(session);
       setWritable(session.paired && session.status !== 'closed' && !session.closed_at);
-      if (paired) loadMessages();
+      if (!wasPaired && paired) loadMessages(true);
     }
 
     async function pairDevice() {
@@ -254,11 +274,11 @@ MOBILE_PAGE = """<!doctype html>
         setPaired(true);
         setWritable(true);
         initSession();
-        loadMessages();
+        loadMessages(true);
       }
     }
     function refreshAfterWrite() {
-      loadMessages();
+      loadMessages(true);
       initSession();
     }
     async function sendText() {
@@ -281,12 +301,13 @@ MOBILE_PAGE = """<!doctype html>
         refreshAfterWrite();
       }
     }
-    async function uploadFile() {
+    async function uploadSelectedFile() {
       const file = document.getElementById('file').files[0];
       if (!file) {
         document.getElementById('status').textContent = '请选择文件';
         return;
       }
+      document.getElementById('status').textContent = '正在上传 ' + file.name;
       const data = new FormData();
       data.append('file', file);
       const response = await fetch('/api/uploads', { method: 'POST', body: data });
@@ -307,13 +328,27 @@ MOBILE_PAGE = """<!doctype html>
         : statusText(payload, '结束失败');
       if (response.ok) refreshAfterWrite();
     }
-    async function loadMessages() {
-      const response = await fetch('/api/messages');
-      if (!response.ok) return;
-      const payload = await response.json();
-      const messages = document.getElementById('messages');
-      messages.innerHTML = '';
-      for (const item of payload.messages) {
+    async function loadMessages(force) {
+      if (!paired || messagesLoading) return;
+      messagesLoading = true;
+      try {
+        const response = await fetch('/api/messages');
+        if (!response.ok) return;
+        const payload = await response.json();
+        const signature = JSON.stringify(payload.messages.map((item) => [
+          item.id,
+          item.kind,
+          item.sender,
+          item.text,
+          item.edited_at,
+          item.attachment_id,
+          item.filename
+        ]));
+        if (!force && signature === lastMessagesSignature) return;
+        lastMessagesSignature = signature;
+        const messages = document.getElementById('messages');
+        messages.innerHTML = '';
+        for (const item of payload.messages) {
         const row = document.createElement('div');
         row.className = 'message-row ' + item.sender;
         const bubble = document.createElement('div');
@@ -328,25 +363,46 @@ MOBILE_PAGE = """<!doctype html>
           body.textContent = item.text;
           bubble.appendChild(body);
         } else {
-          const link = document.createElement('a');
-          link.className = 'file-card';
-          link.href = '/api/attachments/' + encodeURIComponent(item.attachment_id);
-          link.target = '_blank';
-          link.download = item.filename || 'attachment';
-          const name = document.createElement('div');
-          name.className = 'file-name';
-          name.textContent = item.kind === 'image' ? '图片 · ' + item.filename : item.filename;
-          const fileMeta = document.createElement('div');
-          fileMeta.className = 'file-meta';
-          fileMeta.textContent = '点击下载附件';
-          link.appendChild(name);
-          link.appendChild(fileMeta);
-          bubble.appendChild(link);
+          if (item.kind === 'image') {
+            const link = document.createElement('a');
+            link.className = 'image-card';
+            link.href = '/api/attachments/' + encodeURIComponent(item.attachment_id);
+            link.target = '_blank';
+            link.download = item.filename || 'image';
+            const image = document.createElement('img');
+            image.className = 'image-preview';
+            image.src = link.href;
+            image.alt = item.filename || '图片';
+            const fileMeta = document.createElement('div');
+            fileMeta.className = 'file-meta';
+            fileMeta.textContent = item.filename || '点击查看图片';
+            link.appendChild(image);
+            link.appendChild(fileMeta);
+            bubble.appendChild(link);
+          } else {
+            const link = document.createElement('a');
+            link.className = 'file-card';
+            link.href = '/api/attachments/' + encodeURIComponent(item.attachment_id);
+            link.target = '_blank';
+            link.download = item.filename || 'attachment';
+            const name = document.createElement('div');
+            name.className = 'file-name';
+            name.textContent = item.filename;
+            const fileMeta = document.createElement('div');
+            fileMeta.className = 'file-meta';
+            fileMeta.textContent = '点击下载附件';
+            link.appendChild(name);
+            link.appendChild(fileMeta);
+            bubble.appendChild(link);
+          }
         }
         row.appendChild(bubble);
         messages.appendChild(row);
       }
       messages.scrollTop = messages.scrollHeight;
+      } finally {
+        messagesLoading = false;
+      }
     }
     initSession();
     setWritable(false);
@@ -535,9 +591,12 @@ class TransferHttpServer:
                 encoded_filename = quote(attachment.filename)
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", content_type)
+                disposition = (
+                    "inline" if content_type.startswith("image/") else "attachment"
+                )
                 self.send_header(
                     "Content-Disposition",
-                    f"attachment; filename*=UTF-8''{encoded_filename}",
+                    f"{disposition}; filename*=UTF-8''{encoded_filename}",
                 )
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
