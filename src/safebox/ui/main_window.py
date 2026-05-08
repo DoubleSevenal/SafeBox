@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         self.clipboard = SecureClipboard(self.settings.clipboard_clear_seconds)
         self.current_account_id = ""
         self.current_note_id = ""
+        self.current_transfer_id = ""
         self.account_editing = False
         self.note_editing = False
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
@@ -166,6 +167,7 @@ class MainWindow(QMainWindow):
         self.notes_page = self._build_notes_page()
         self.note_detail_page = self._build_note_detail_page()
         self.transfer_page = self._build_transfer_page()
+        self.transfer_detail_page = self._build_transfer_detail_page()
         self.trash_page = self._build_trash_page()
         self.settings_page = self._build_settings_page()
         for page in (
@@ -174,6 +176,7 @@ class MainWindow(QMainWindow):
             self.notes_page,
             self.note_detail_page,
             self.transfer_page,
+            self.transfer_detail_page,
             self.trash_page,
             self.settings_page,
         ):
@@ -347,9 +350,9 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         title = QLabel("传输助手")
         title.setObjectName("PageTitle")
-        connect_phone = QPushButton("连接手机")
-        connect_phone.setObjectName("PrimaryButton")
-        connect_phone.setToolTip("后续阶段将支持手机扫码连接")
+        self.connect_phone_button = QPushButton("连接手机")
+        self.connect_phone_button.setObjectName("PrimaryButton")
+        self.connect_phone_button.setToolTip("后续阶段将支持手机扫码连接")
         self.transfer_status = QLabel("")
         self.transfer_status.setObjectName("DataStatus")
         self.transfer_status.setWordWrap(True)
@@ -363,7 +366,7 @@ class MainWindow(QMainWindow):
         self.transfer_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         header.addWidget(title)
         header.addStretch()
-        header.addWidget(connect_phone)
+        header.addWidget(self.connect_phone_button)
         layout.addLayout(header)
         layout.addWidget(self.transfer_status)
         layout.addWidget(self.transfer_device_notice)
@@ -371,6 +374,41 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.transfer_list, 1)
 
         self.transfer_search.textChanged.connect(self._refresh_transfer_conversations)
+        self.transfer_list.itemClicked.connect(self._open_transfer_item)
+        self.connect_phone_button.clicked.connect(self._show_connect_phone_placeholder)
+        return page
+
+    def _build_transfer_detail_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        top = QHBoxLayout()
+        back = QPushButton("返回列表")
+        back.setObjectName("SubtleButton")
+        self.transfer_detail_title = QLabel("传输记录")
+        self.transfer_detail_title.setObjectName("HeroTitle")
+        self.transfer_detail_meta = QLabel("")
+        self.transfer_detail_meta.setObjectName("HeroMeta")
+        self.transfer_detail_notice = QLabel("只读查看：后续阶段将显示完整聊天内容和附件列表")
+        self.transfer_detail_notice.setObjectName("DataStatus")
+        self.transfer_detail_notice.setWordWrap(True)
+        self.transfer_detail_body = QTextEdit()
+        self.transfer_detail_body.setObjectName("DetailNote")
+        self.transfer_detail_body.setReadOnly(True)
+        top.addWidget(back)
+        top.addStretch()
+        hero = QFrame()
+        hero.setObjectName("DetailHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(20, 16, 20, 16)
+        hero_layout.addWidget(self.transfer_detail_title)
+        hero_layout.addWidget(self.transfer_detail_meta)
+        layout.addLayout(top)
+        layout.addWidget(hero)
+        layout.addWidget(self.transfer_detail_notice)
+        layout.addWidget(self.transfer_detail_body, 1)
+
+        back.clicked.connect(self._show_transfer_list_page)
         return page
 
     def _build_note_detail_page(self) -> QWidget:
@@ -758,6 +796,12 @@ class MainWindow(QMainWindow):
         self._show_module_page("transfer", self.transfer_page)
         self._refresh_transfer_conversations()
 
+    def _show_transfer_list_page(self) -> None:
+        self._remember_module_page("transfer", self.transfer_page)
+        self._set_nav("transfer")
+        self.pages.setCurrentWidget(self.transfer_page)
+        self._refresh_transfer_conversations()
+
     def _show_trash_page(self) -> None:
         self._remember_module_page("trash", self.trash_page)
         self._set_nav("trash")
@@ -1001,6 +1045,27 @@ class MainWindow(QMainWindow):
                 f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
             )
             self.transfer_list.setItemWidget(item, RecordListItem(summary, subtitle))
+
+    def _open_transfer_item(self, item: QListWidgetItem) -> None:
+        self.current_transfer_id = item.data(Qt.ItemDataRole.UserRole)
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        self.transfer_detail_title.setText(conversation.title)
+        self.transfer_detail_meta.setText(
+            f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)}"
+        )
+        self.transfer_detail_body.setPlainText(
+            "聊天内容将在后续阶段接入。\n\n"
+            f"消息数量：{conversation.message_count}\n"
+            f"附件数量：{conversation.attachment_count}"
+        )
+        self._remember_module_page("transfer", self.transfer_detail_page)
+        self.pages.setCurrentWidget(self.transfer_detail_page)
+
+    def _show_connect_phone_placeholder(self) -> None:
+        self.transfer_status.setText(
+            "手机连接将在后续阶段支持：电脑显示二维码，手机扫码配对后开始同步。"
+        )
+        self.transfer_status.setVisible(True)
 
     def _update_data_status(
         self,
@@ -1487,6 +1552,7 @@ class MainWindow(QMainWindow):
         self._clear_account_fields()
         self.current_account_id = ""
         self.current_note_id = ""
+        self.current_transfer_id = ""
         self._reset_module_pages()
         self._open_vault()
 

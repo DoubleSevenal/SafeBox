@@ -214,6 +214,88 @@ def test_transfer_assistant_page_lists_local_conversations(
     window.close()
 
 
+def test_transfer_conversation_opens_read_only_detail(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.close_transfer_conversation(conversation.id)
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    assert window.current_transfer_id == conversation.id
+    assert window.pages.currentWidget() == window.transfer_detail_page
+    assert window.transfer_detail_title.text() == "报销资料"
+    assert "安卓手机" in window.transfer_detail_meta.text()
+    assert "只读查看" in window.transfer_detail_notice.text()
+
+    window._show_notes_page()
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_detail_page
+
+    window.close()
+
+
+def test_connect_phone_button_shows_placeholder_notice(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+
+    assert window.transfer_status.isHidden()
+
+    window.connect_phone_button.click()
+
+    assert not window.transfer_status.isHidden()
+    assert "扫码配对" in window.transfer_status.text()
+
+    window.close()
+
+
+def test_transfer_detail_back_resets_transfer_module_to_list(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_transfer_conversation(title="报销资料", device_name="安卓手机")
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    window._open_transfer_item(window.transfer_list.item(0))
+    window._show_transfer_list_page()
+    assert window.pages.currentWidget() == window.transfer_page
+
+    window._show_notes_page()
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_page
+
+    window.close()
+
+
 def test_explicit_back_resets_account_module_to_list(
     vault_path: Path,
     monkeypatch,
