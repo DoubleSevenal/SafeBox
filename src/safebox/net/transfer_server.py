@@ -12,7 +12,11 @@ from threading import Thread
 from typing import Any
 
 from safebox.core.services import VaultService
-from safebox.core.transfer import TransferMessageKind, TransferMessageSender
+from safebox.core.transfer import (
+    TransferConversationStatus,
+    TransferMessageKind,
+    TransferMessageSender,
+)
 
 
 def lan_ip_address() -> str:
@@ -390,6 +394,15 @@ class TransferHttpServer:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "file_required"})
                     return
                 filename, mime_type, content = file_part
+                conversation = owner.service.get_transfer_conversation(
+                    owner.conversation_id
+                )
+                if conversation.status != TransferConversationStatus.ACTIVE:
+                    self._send_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": "Transfer conversation is closed"},
+                    )
+                    return
                 target_dir = owner.upload_dir / owner.conversation_id
                 target_dir.mkdir(parents=True, exist_ok=True)
                 target = _unique_path(target_dir / filename)

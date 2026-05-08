@@ -367,6 +367,31 @@ def test_transfer_server_rejects_upload_before_pairing(vault_path) -> None:
     assert service.list_transfer_attachments(server.conversation_id) == []
 
 
+def test_transfer_server_rejects_upload_after_close_without_saving_file(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _request_json(f"{server.url}/api/close", {})
+        status = _upload_error_code(
+            f"{server.url}/api/uploads",
+            "after-close.pdf",
+            b"pdf data",
+            "application/pdf",
+        )
+    finally:
+        server.stop()
+
+    upload_dir = server.upload_dir / server.conversation_id
+
+    assert status == 400
+    assert not upload_dir.exists()
+    assert service.list_transfer_attachments(server.conversation_id) == []
+
+
 def test_transfer_server_treats_uploaded_image_as_image_message(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
