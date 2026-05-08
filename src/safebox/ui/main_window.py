@@ -520,12 +520,16 @@ class MainWindow(QMainWindow):
         back.setObjectName("SubtleButton")
         self.note_edit_button = QPushButton("编辑")
         self.note_edit_button.setObjectName("SubtleButton")
+        self.note_attachments_button = QPushButton("查看附件")
+        self.note_attachments_button.setObjectName("SubtleButton")
+        self.note_attachments_button.setVisible(False)
         self.note_save_button = QPushButton("保存")
         self.note_save_button.setObjectName("PrimaryButton")
         delete = QPushButton("删除")
         delete.setObjectName("DangerButton")
         top.addWidget(back)
         top.addStretch()
+        top.addWidget(self.note_attachments_button)
         top.addWidget(self.note_edit_button)
         top.addWidget(self.note_save_button)
         top.addWidget(delete)
@@ -625,6 +629,7 @@ class MainWindow(QMainWindow):
 
         back.clicked.connect(self._show_notes_list_page)
         self.note_edit_button.clicked.connect(self._enter_note_edit_mode)
+        self.note_attachments_button.clicked.connect(self._show_current_note_attachments)
         self.note_save_button.clicked.connect(self._save_current_note)
         delete.clicked.connect(self._delete_current_note)
         bold.clicked.connect(lambda: self._toggle_text_property("bold"))
@@ -1682,6 +1687,9 @@ class MainWindow(QMainWindow):
         self.note_category.setCurrentText(record.category)
         self.note_body.setHtml(record.note)
         self._show_note_source_info(record.note)
+        self.note_attachments_button.setVisible(
+            bool(self._transfer_conversation_for_note(record.id))
+        )
         self._set_note_edit_mode(False)
 
     def _add_account(self) -> None:
@@ -1827,6 +1835,27 @@ class MainWindow(QMainWindow):
         self.note_save_notice.setText(text)
         self.note_save_notice.setVisible(True)
         QTimer.singleShot(2000, lambda: self.note_save_notice.setVisible(False))
+
+    def _transfer_conversation_for_note(self, note_id: str):
+        for conversation in self.service.list_transfer_conversations():
+            if conversation.note_id == note_id:
+                return conversation
+        return None
+
+    def _show_current_note_attachments(self) -> None:
+        if not self.current_note_id:
+            return
+        conversation = self._transfer_conversation_for_note(self.current_note_id)
+        if conversation is None:
+            self._show_note_save_notice("当前纸条没有会话附件")
+            return
+        self.current_transfer_id = conversation.id
+        attachments = self.service.list_transfer_attachments(conversation.id)
+        image = next((item for item in attachments if item.mime_type.startswith("image/")), None)
+        if image is not None:
+            self._preview_transfer_image_attachment(image)
+            return
+        self._show_note_save_notice(self._format_transfer_attachments(conversation.id))
 
     def _show_note_source_info(self, note: str) -> None:
         source = _note_source(note)
