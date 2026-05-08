@@ -9,6 +9,7 @@ from safebox.core.crypto import CryptoBox, InvalidPasswordError
 from safebox.core.models import Record, RecordSummary, RecordType
 from safebox.core.store import VaultStore
 from safebox.core.transfer import (
+    DownloadHistoryRecord,
     TransferAttachment,
     TransferConversation,
     TransferConversationStatus,
@@ -212,6 +213,7 @@ class VaultService:
         conversations = self._load_transfer_conversations()
         messages = self.store.load_all_transfer_messages(self._require_box())
         attachments = self.store.load_all_transfer_attachments(self._require_box())
+        download_history = self.store.load_download_history(self._require_box())
         box = CryptoBox.create(new_password)
         self.store.save_crypto_box(box)
         self._box = box
@@ -223,6 +225,8 @@ class VaultService:
             self._save_transfer_message(message)
         for attachment in attachments:
             self._save_transfer_attachment(attachment)
+        for download_record in download_history:
+            self._save_download_history_record(download_record)
 
     def create_transfer_conversation(
         self,
@@ -389,6 +393,51 @@ class VaultService:
             if not attachment.deleted_at
         ]
 
+    def record_transfer_download(
+        self,
+        *,
+        conversation_id: str,
+        message_id: str,
+        attachment_id: str,
+        filename: str,
+        saved_path: Path,
+        size_bytes: int = 0,
+    ) -> DownloadHistoryRecord:
+        self.get_transfer_conversation(conversation_id)
+        now = _now()
+        record = DownloadHistoryRecord(
+            id=f"dh_{uuid4().hex}",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            attachment_id=attachment_id,
+            filename=filename.strip(),
+            saved_path=str(saved_path),
+            size_bytes=max(0, size_bytes),
+            downloaded_at=now,
+            exists=Path(saved_path).exists(),
+        )
+        self._save_download_history_record(record)
+        return record
+
+    def list_download_history(self) -> list[DownloadHistoryRecord]:
+        records = self.store.load_download_history(self._require_box())
+        for record in records:
+            record.exists = Path(record.saved_path).exists()
+        return records
+
+    def delete_download_history_record(self, record_id: str) -> None:
+        for record in self.list_download_history():
+            if record.id == record_id:
+                record.deleted_at = _now()
+                self._save_download_history_record(record)
+                return
+        raise KeyError(record_id)
+
+    def clear_download_history(self) -> None:
+        for record in self.list_download_history():
+            record.deleted_at = _now()
+            self._save_download_history_record(record)
+
     def export_transfer_conversation_to_note(self, conversation_id: str) -> Record:
         conversation = self.get_transfer_conversation(conversation_id)
         messages = self.list_transfer_messages(conversation_id)
@@ -467,6 +516,9 @@ class VaultService:
 
     def _save_transfer_attachment(self, attachment: TransferAttachment) -> None:
         self.store.upsert_transfer_attachment(self._require_box(), attachment)
+
+    def _save_download_history_record(self, record: DownloadHistoryRecord) -> None:
+        self.store.upsert_download_history_record(self._require_box(), record)
 
     def _require_box(self) -> CryptoBox:
         if self._box is None:

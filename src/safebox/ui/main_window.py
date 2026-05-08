@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
         self.transfer_chat_page = self._build_transfer_chat_page()
         self.trash_page = self._build_trash_page()
         self.settings_page = self._build_settings_page()
+        self.download_history_page = self._build_download_history_page()
         for page in (
             self.accounts_page,
             self.account_detail_page,
@@ -182,6 +183,7 @@ class MainWindow(QMainWindow):
             self.transfer_chat_page,
             self.trash_page,
             self.settings_page,
+            self.download_history_page,
         ):
             self.pages.addWidget(page)
         self._reset_module_pages()
@@ -658,12 +660,17 @@ class MainWindow(QMainWindow):
         self.backup_dir_label = QLabel("")
         self.backup_dir_label.setObjectName("SettingsValue")
         self.backup_dir_label.setWordWrap(True)
+        self.transfer_download_dir_label = QLabel("")
+        self.transfer_download_dir_label.setObjectName("SettingsValue")
+        self.transfer_download_dir_label.setWordWrap(True)
         choose_backup = QPushButton("设置备份位置")
         choose_backup.setObjectName("SubtleButton")
         sync_now = QPushButton("立即同步")
         sync_now.setObjectName("PrimaryButton")
         restore_backup = QPushButton("从备份恢复")
         restore_backup.setObjectName("SubtleButton")
+        show_download_history = QPushButton("查看下载历史")
+        show_download_history.setObjectName("SubtleButton")
         self.auto_sync_check = QCheckBox("关闭软件时自动同步当前保险箱")
         self.auto_sync_check.setChecked(True)
         self.auto_lock_combo = QComboBox()
@@ -699,6 +706,17 @@ class MainWindow(QMainWindow):
         backup_actions.addStretch()
         backup_card.layout().addLayout(backup_actions)
         layout.addWidget(backup_card)
+        transfer_card = self._settings_card(
+            "传输助手",
+            "管理附件下载位置和下载历史。",
+            (("默认下载位置", self.transfer_download_dir_label),),
+        )
+        transfer_actions = QHBoxLayout()
+        transfer_actions.setSpacing(10)
+        transfer_actions.addWidget(show_download_history)
+        transfer_actions.addStretch()
+        transfer_card.layout().addLayout(transfer_actions)
+        layout.addWidget(transfer_card)
         security_card = self._settings_card(
             "安全",
             "控制自动同步和保险箱密码。",
@@ -727,10 +745,49 @@ class MainWindow(QMainWindow):
         choose_backup.clicked.connect(self._choose_backup_dir)
         sync_now.clicked.connect(self._sync_current_vault)
         restore_backup.clicked.connect(self._restore_current_vault_from_backup)
+        show_download_history.clicked.connect(self._show_download_history_page)
         self.auto_sync_check.toggled.connect(self._set_auto_sync_on_close)
         self.auto_lock_combo.currentTextChanged.connect(self._set_auto_lock_mode)
         self.custom_auto_lock_minutes.valueChanged.connect(self._set_custom_auto_lock_minutes)
         change_password.clicked.connect(self._change_master_password)
+        return page
+
+    def _build_download_history_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        header = QHBoxLayout()
+        back = QPushButton("返回设置")
+        back.setObjectName("SubtleButton")
+        title = QLabel("下载历史")
+        title.setObjectName("PageTitle")
+        clear = QPushButton("清空下载列表")
+        clear.setObjectName("DangerButton")
+        self.download_history_status = QLabel("下载历史为空")
+        self.download_history_status.setObjectName("DataStatus")
+        self.download_history_status.setWordWrap(True)
+        self.download_history_list = QListWidget()
+        self.download_history_list.setObjectName("RecordList")
+        self.download_history_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        action_row = QHBoxLayout()
+        delete_record = QPushButton("清除选中记录")
+        delete_record.setObjectName("SubtleButton")
+        action_row.addStretch()
+        action_row.addWidget(delete_record)
+        header.addWidget(back)
+        header.addStretch()
+        header.addWidget(clear)
+        layout.addLayout(header)
+        layout.addWidget(title)
+        layout.addWidget(self.download_history_status)
+        layout.addWidget(self.download_history_list, 1)
+        layout.addLayout(action_row)
+
+        back.clicked.connect(self._show_settings_page)
+        clear.clicked.connect(self._clear_download_history)
+        delete_record.clicked.connect(self._delete_selected_download_history)
         return page
 
     def _settings_card(
@@ -879,6 +936,12 @@ class MainWindow(QMainWindow):
         self._refresh_settings_view()
         self.pages.setCurrentWidget(self.settings_page)
 
+    def _show_download_history_page(self) -> None:
+        self._remember_module_page("settings", self.download_history_page)
+        self._set_nav("settings")
+        self.pages.setCurrentWidget(self.download_history_page)
+        self._refresh_download_history()
+
     def _change_master_password(self) -> None:
         dialog = ChangePasswordDialog(self)
         if not dialog.exec():
@@ -899,6 +962,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_settings_view(self) -> None:
         self.settings_vault_label.setText(f"当前保险箱ID：{self.vault_name}")
+        self.transfer_download_dir_label.setText(str(self.settings.transfer_download_dir))
         backup_dir = self.profile_settings.backup_dir or "未设置"
         backup_file = ""
         if backup_dir != "未设置":
@@ -1250,6 +1314,48 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, summary.id)
             self.trash_list.addItem(item)
             self.trash_list.setItemWidget(item, RecordListItem(summary, "已移入回收站"))
+
+    def _refresh_download_history(self) -> None:
+        self.download_history_list.clear()
+        history = self.service.list_download_history()
+        if not history:
+            self.download_history_status.setText("下载历史为空")
+            self._add_empty_record_item(self.download_history_list, "当前没有下载记录")
+            return
+        status_lines: list[str] = []
+        for record in history:
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 74))
+            item.setData(Qt.ItemDataRole.UserRole, record.id)
+            self.download_history_list.addItem(item)
+            state = "文件存在" if record.exists else "文件不存在"
+            status_lines.append(f"{record.filename} · {state}")
+            summary = RecordSummary(
+                id=record.id,
+                type=RecordType.SECURE_NOTE,
+                name=record.filename,
+                account=record.saved_path,
+                category=state,
+                favorite=False,
+                created_at=record.downloaded_at,
+                updated_at=record.downloaded_at,
+            )
+            subtitle = f"{_format_size_bytes(record.size_bytes)} · {record.saved_path}"
+            self.download_history_list.setItemWidget(item, RecordListItem(summary, subtitle))
+        self.download_history_status.setText("\n".join(status_lines))
+
+    def _delete_selected_download_history(self) -> None:
+        item = self.download_history_list.currentItem()
+        if item is None and self.download_history_list.count() == 1:
+            item = self.download_history_list.item(0)
+        if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
+            return
+        self.service.delete_download_history_record(item.data(Qt.ItemDataRole.UserRole))
+        self._refresh_download_history()
+
+    def _clear_download_history(self) -> None:
+        self.service.clear_download_history()
+        self._refresh_download_history()
 
     def _open_account_item(self, item: QListWidgetItem) -> None:
         self.current_account_id = item.data(Qt.ItemDataRole.UserRole)

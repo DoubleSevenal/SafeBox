@@ -115,3 +115,30 @@ class TransferAttachment:
         clean.setdefault("sha256", "")
         clean.setdefault("deleted_at", "")
         return cls(**clean)
+
+
+@dataclass(slots=True)
+class DownloadHistoryRecord:
+    id: str
+    conversation_id: str
+    message_id: str
+    attachment_id: str
+    filename: str
+    saved_path: str
+    size_bytes: int = 0
+    downloaded_at: str = ""
+    deleted_at: str = ""
+    exists: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data.pop("exists", None)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DownloadHistoryRecord:
+        clean = dict(data)
+        clean.setdefault("size_bytes", 0)
+        clean.setdefault("deleted_at", "")
+        clean.setdefault("exists", False)
+        return cls(**clean)

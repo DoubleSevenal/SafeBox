@@ -5,7 +5,12 @@ from pathlib import Path
 
 from safebox.core.crypto import CryptoBox
 from safebox.core.models import Record
-from safebox.core.transfer import TransferAttachment, TransferConversation, TransferMessage
+from safebox.core.transfer import (
+    DownloadHistoryRecord,
+    TransferAttachment,
+    TransferConversation,
+    TransferMessage,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS vault_meta (
@@ -47,6 +52,16 @@ CREATE TABLE IF NOT EXISTS transfer_attachments (
     message_id TEXT NOT NULL,
     filename_index TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    encrypted_payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS download_history (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    attachment_id TEXT NOT NULL,
+    filename_index TEXT NOT NULL,
+    downloaded_at TEXT NOT NULL,
+    deleted_at TEXT NOT NULL DEFAULT '',
     encrypted_payload TEXT NOT NULL
 );
 """
@@ -251,6 +266,53 @@ class VaultStore:
     def load_all_transfer_attachments(self, box: CryptoBox) -> list[TransferAttachment]:
         rows = self._load_transfer_attachment_rows()
         return [TransferAttachment.from_dict(box.decrypt_json(row[0])) for row in rows]
+
+    def upsert_download_history_record(
+        self,
+        box: CryptoBox,
+        record: DownloadHistoryRecord,
+    ) -> None:
+        encrypted = box.encrypt_json(record.to_dict())
+        with self._connect() as con:
+            con.executescript(SCHEMA)
+            con.execute(
+                """
+                INSERT INTO download_history(
+                    id, conversation_id, attachment_id, filename_index, downloaded_at,
+                    deleted_at, encrypted_payload
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    attachment_id = excluded.attachment_id,
+                    filename_index = excluded.filename_index,
+                    downloaded_at = excluded.downloaded_at,
+                    deleted_at = excluded.deleted_at,
+                    encrypted_payload = excluded.encrypted_payload
+                """,
+                (
+                    record.id,
+                    record.conversation_id,
+                    record.attachment_id,
+                    record.filename.casefold(),
+                    record.downloaded_at,
+                    record.deleted_at,
+                    encrypted,
+                ),
+            )
+
+    def load_download_history(self, box: CryptoBox) -> list[DownloadHistoryRecord]:
+        with self._connect() as con:
+            con.executescript(SCHEMA)
+            rows = con.execute(
+                """
+                SELECT encrypted_payload
+                FROM download_history
+                WHERE deleted_at = ''
+                ORDER BY downloaded_at DESC
+                """
+            ).fetchall()
+        return [DownloadHistoryRecord.from_dict(box.decrypt_json(row[0])) for row in rows]
 
     def _load_transfer_message_rows(
         self,

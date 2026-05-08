@@ -12,6 +12,10 @@ class AppSettings:
     auto_lock_seconds: int = 300
     clipboard_clear_seconds: int = 20
 
+    @property
+    def transfer_download_dir(self) -> Path:
+        return Path.home() / "Downloads" / APP_DIR_NAME
+
 
 def default_vault_path() -> Path:
     base = Path.home() / "AppData" / "Local" / APP_DIR_NAME

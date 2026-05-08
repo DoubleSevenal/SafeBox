@@ -504,6 +504,72 @@ def test_transfer_chat_shows_attachment_summary(
     window.close()
 
 
+def test_settings_show_transfer_download_defaults_and_history(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    message, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    saved_path = tmp_path / "invoice.pdf"
+    saved_path.write_text("pdf", encoding="utf-8")
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=message.id,
+        attachment_id=attachment.id,
+        filename=attachment.filename,
+        saved_path=saved_path,
+        size_bytes=attachment.size_bytes,
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_settings_page()
+
+    assert "Downloads" in window.transfer_download_dir_label.text()
+    assert "SafeBox" in window.transfer_download_dir_label.text()
+
+    window._show_download_history_page()
+
+    assert window.pages.currentWidget() == window.download_history_page
+    assert window.download_history_list.count() == 1
+    assert "invoice.pdf" in window.download_history_status.text()
+    assert "文件存在" in window.download_history_status.text()
+
+    saved_path.unlink()
+    window._refresh_download_history()
+
+    assert "文件不存在" in window.download_history_status.text()
+
+    window._delete_selected_download_history()
+    assert window.download_history_list.count() == 1
+
+    window._clear_download_history()
+    assert window.download_history_status.text() == "下载历史为空"
+
+    window.close()
+
+
 def test_explicit_back_resets_account_module_to_list(
     vault_path: Path,
     monkeypatch,

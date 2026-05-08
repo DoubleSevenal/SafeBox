@@ -235,6 +235,126 @@ def test_change_master_password_reencrypts_transfer_attachments(vault_path) -> N
     assert [attachment.filename for attachment in attachments] == ["invoice.pdf"]
 
 
+def test_service_records_and_lists_download_history(vault_path, tmp_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    message, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    saved_path = tmp_path / "invoice.pdf"
+    saved_path.write_text("pdf", encoding="utf-8")
+
+    record = service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=message.id,
+        attachment_id=attachment.id,
+        filename=attachment.filename,
+        saved_path=saved_path,
+        size_bytes=attachment.size_bytes,
+    )
+
+    history = service.list_download_history()
+
+    assert history[0].id == record.id
+    assert history[0].filename == "invoice.pdf"
+    assert history[0].saved_path == str(saved_path)
+    assert history[0].exists is True
+
+    saved_path.unlink()
+
+    assert service.list_download_history()[0].exists is False
+
+
+def test_service_deletes_and_clears_download_history(vault_path, tmp_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    message, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    first = service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=message.id,
+        attachment_id=attachment.id,
+        filename=attachment.filename,
+        saved_path=tmp_path / "invoice.pdf",
+        size_bytes=attachment.size_bytes,
+    )
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=message.id,
+        attachment_id=attachment.id,
+        filename="copy.pdf",
+        saved_path=tmp_path / "copy.pdf",
+        size_bytes=attachment.size_bytes,
+    )
+
+    service.delete_download_history_record(first.id)
+
+    assert [item.filename for item in service.list_download_history()] == ["copy.pdf"]
+
+    service.clear_download_history()
+
+    assert service.list_download_history() == []
+
+
+def test_change_master_password_reencrypts_download_history(vault_path, tmp_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("old password")
+    service.unlock("old password")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    message, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=message.id,
+        attachment_id=attachment.id,
+        filename=attachment.filename,
+        saved_path=tmp_path / "invoice.pdf",
+        size_bytes=attachment.size_bytes,
+    )
+
+    service.change_master_password("old password", "new password")
+    service.lock()
+    service.unlock("new password")
+
+    assert [item.filename for item in service.list_download_history()] == ["invoice.pdf"]
+
+
 def test_transfer_conversation_exports_to_session_note(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
