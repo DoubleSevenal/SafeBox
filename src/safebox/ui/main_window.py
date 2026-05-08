@@ -466,7 +466,7 @@ class MainWindow(QMainWindow):
         self.transfer_message_input.setObjectName("TransferMessageInput")
         self.transfer_message_input.setPlaceholderText("输入要发送给手机的文字")
         self.transfer_message_input.setFixedHeight(92)
-        self.transfer_send_button = QPushButton("发送")
+        self.transfer_send_button = QPushButton("发送到手机")
         self.transfer_send_button.setObjectName("PrimaryButton")
         self.transfer_edit_last_button = QPushButton("编辑消息")
         self.transfer_edit_last_button.setObjectName("SubtleButton")
@@ -2110,6 +2110,7 @@ class TransferMessageList(QListWidget):
                     created_at=message.created_at,
                     text=content,
                     edited=bool(message.edited_at),
+                    outbound=message.sender == TransferMessageSender.DESKTOP,
                 ),
             )
         self._plain_text = "\n\n".join(blocks)
@@ -2127,18 +2128,38 @@ class TransferMessageList(QListWidget):
 
 
 class TransferMessageItem(QWidget):
-    def __init__(self, *, sender: str, created_at: str, text: str, edited: bool) -> None:
+    def __init__(
+        self,
+        *,
+        sender: str,
+        created_at: str,
+        text: str,
+        edited: bool,
+        outbound: bool,
+    ) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 8, 14, 8)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(10)
+        bubble = QFrame()
+        bubble.setObjectName("TransferBubbleDesktop" if outbound else "TransferBubblePhone")
+        bubble.setMaximumWidth(520)
+        layout = QVBoxLayout(bubble)
+        layout.setContentsMargins(14, 9, 14, 10)
         layout.setSpacing(5)
         meta = QLabel(f"{sender} {created_at}{' · 已编辑' if edited else ''}")
-        meta.setObjectName("RecordSubtitle")
+        meta.setObjectName("TransferBubbleMeta")
         body = QLabel(text)
-        body.setObjectName("RecordTitle")
+        body.setObjectName("TransferBubbleText")
         body.setWordWrap(True)
         layout.addWidget(meta)
         layout.addWidget(body)
+        if outbound:
+            outer.addStretch(1)
+            outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight)
+        else:
+            outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+            outer.addStretch(1)
 
 
 def _category_color_key(category: str) -> str:

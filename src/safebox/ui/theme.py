@@ -568,10 +568,40 @@ QListWidget#RecordList {
     border-radius: 16px;
 }
 QListWidget#TransferMessageList {
-    background: #ffffff;
+    background: #f6f9fe;
     border: 1px solid #dbe5f3;
     border-radius: 16px;
     padding: 8px;
+}
+QListWidget#TransferMessageList::item:hover {
+    background: transparent;
+    border: 0;
+}
+QListWidget#TransferMessageList::item:selected {
+    background: #e0edff;
+    border: 1px solid #93c5fd;
+}
+QFrame#TransferBubbleDesktop {
+    background: #dcf8c6;
+    border: 1px solid #b7e59c;
+    border-radius: 14px;
+}
+QFrame#TransferBubblePhone {
+    background: #ffffff;
+    border: 1px solid #dbe5f3;
+    border-radius: 14px;
+}
+QLabel#TransferBubbleMeta {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+QLabel#TransferBubbleText {
+    color: #0f172a;
+    font-size: 15px;
+    line-height: 1.45;
+    background: transparent;
 }
 QListWidget::item {
     min-height: 62px;
