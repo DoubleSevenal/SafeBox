@@ -9,6 +9,7 @@ from safebox.core.crypto import CryptoBox, InvalidPasswordError
 from safebox.core.models import Record, RecordSummary, RecordType
 from safebox.core.store import VaultStore
 from safebox.core.transfer import (
+    TransferAttachment,
     TransferConversation,
     TransferConversationStatus,
     TransferMessage,
@@ -210,6 +211,7 @@ class VaultService:
         records = self._load_all()
         conversations = self._load_transfer_conversations()
         messages = self.store.load_all_transfer_messages(self._require_box())
+        attachments = self.store.load_all_transfer_attachments(self._require_box())
         box = CryptoBox.create(new_password)
         self.store.save_crypto_box(box)
         self._box = box
@@ -219,6 +221,8 @@ class VaultService:
             self._save_transfer_conversation(conversation)
         for message in messages:
             self._save_transfer_message(message)
+        for attachment in attachments:
+            self._save_transfer_attachment(attachment)
 
     def create_transfer_conversation(
         self,
@@ -309,6 +313,60 @@ class VaultService:
         self._save_transfer_conversation(conversation)
         return message
 
+    def add_transfer_attachment_message(
+        self,
+        conversation_id: str,
+        *,
+        sender: TransferMessageSender,
+        kind: TransferMessageKind,
+        filename: str,
+        mime_type: str = "",
+        size_bytes: int = 0,
+        storage_path: str = "",
+        sha256: str = "",
+        text: str = "",
+    ) -> tuple[TransferMessage, TransferAttachment]:
+        if kind not in {TransferMessageKind.IMAGE, TransferMessageKind.FILE}:
+            raise ValueError("Attachment message kind must be image or file")
+        clean_filename = filename.strip()
+        if not clean_filename:
+            raise ValueError("Attachment filename is required")
+        conversation = self.get_transfer_conversation(conversation_id)
+        if conversation.status == TransferConversationStatus.CLOSED:
+            raise ValueError("Transfer conversation is closed")
+        now = _now()
+        attachment = TransferAttachment(
+            id=f"ta_{uuid4().hex}",
+            conversation_id=conversation.id,
+            message_id="",
+            filename=clean_filename,
+            mime_type=mime_type.strip(),
+            size_bytes=max(0, size_bytes),
+            storage_path=storage_path.strip(),
+            sha256=sha256.strip(),
+            created_at=now,
+        )
+        message = TransferMessage(
+            id=f"tm_{uuid4().hex}",
+            conversation_id=conversation.id,
+            sender=sender,
+            kind=kind,
+            text=text.strip(),
+            attachment_id=attachment.id,
+            created_at=now,
+            updated_at=now,
+        )
+        attachment.message_id = message.id
+        self._save_transfer_message(message)
+        self._save_transfer_attachment(attachment)
+        conversation.message_count += 1
+        conversation.attachment_count += 1
+        conversation.updated_at = now
+        if conversation.note_sync_active and conversation.note_id:
+            self._append_transfer_messages_to_note(conversation, [message])
+        self._save_transfer_conversation(conversation)
+        return message, attachment
+
     def list_transfer_messages(self, conversation_id: str) -> list[TransferMessage]:
         self.get_transfer_conversation(conversation_id)
         return [
@@ -318,6 +376,17 @@ class VaultService:
                 conversation_id,
             )
             if not message.deleted_at
+        ]
+
+    def list_transfer_attachments(self, conversation_id: str) -> list[TransferAttachment]:
+        self.get_transfer_conversation(conversation_id)
+        return [
+            attachment
+            for attachment in self.store.load_transfer_attachments(
+                self._require_box(),
+                conversation_id,
+            )
+            if not attachment.deleted_at
         ]
 
     def export_transfer_conversation_to_note(self, conversation_id: str) -> Record:
@@ -365,8 +434,21 @@ class VaultService:
         blocks: list[str] = []
         for message in messages:
             sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
-            blocks.append(f"{sender} {message.created_at}\n{message.text}")
+            content = message.text
+            if message.kind in {TransferMessageKind.IMAGE, TransferMessageKind.FILE}:
+                content = self._attachment_placeholder(message)
+            blocks.append(f"{sender} {message.created_at}\n{content}")
         return "\n\n".join(blocks)
+
+    def _attachment_placeholder(self, message: TransferMessage) -> str:
+        attachments = self.list_transfer_attachments(message.conversation_id)
+        attachment = next(
+            (item for item in attachments if item.id == message.attachment_id),
+            None,
+        )
+        filename = attachment.filename if attachment else "未知附件"
+        label = "图片附件" if message.kind == TransferMessageKind.IMAGE else "文件附件"
+        return f"[{label}] {filename}"
 
     def _save(self, record: Record) -> None:
         self.store.upsert_record(self._require_box(), record)
@@ -382,6 +464,9 @@ class VaultService:
 
     def _save_transfer_message(self, message: TransferMessage) -> None:
         self.store.upsert_transfer_message(self._require_box(), message)
+
+    def _save_transfer_attachment(self, attachment: TransferAttachment) -> None:
+        self.store.upsert_transfer_attachment(self._require_box(), attachment)
 
     def _require_box(self) -> CryptoBox:
         if self._box is None:

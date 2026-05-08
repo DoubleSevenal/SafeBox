@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from safebox.core.services import VaultService
+from safebox.core.transfer import TransferMessageKind, TransferMessageSender
 from safebox.core.vault_profiles import load_profile_settings, vault_path_for_name
 from safebox.ui import main_window
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
@@ -252,6 +253,48 @@ def test_transfer_conversation_opens_read_only_detail(
     window.close()
 
 
+def test_transfer_detail_shows_attachment_list(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.IMAGE,
+        filename="invoice.jpg",
+        mime_type="image/jpeg",
+        size_bytes=2048,
+        storage_path="attachments/tc/invoice.jpg",
+        sha256="abc123",
+    )
+    service.close_transfer_conversation(conversation.id)
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._show_current_transfer_attachments()
+
+    assert "invoice.jpg" in window.transfer_detail_notice.text()
+    assert "image/jpeg" in window.transfer_detail_notice.text()
+    assert "2.0 KB" in window.transfer_detail_notice.text()
+
+    window.close()
+
+
 def test_transfer_detail_back_resets_transfer_module_to_list(
     vault_path: Path,
     monkeypatch,
@@ -416,6 +459,47 @@ def test_transfer_chat_exports_session_note_from_organize_menu(
 
     window._show_notes_page()
     assert window.note_list.count() == 1
+
+    window.close()
+
+
+def test_transfer_chat_shows_attachment_summary(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._show_current_transfer_attachments()
+
+    assert window.pages.currentWidget() == window.transfer_chat_page
+    assert "invoice.pdf" in window.transfer_chat_meta.text()
+    assert "4.0 KB" in window.transfer_chat_meta.text()
 
     window.close()
 

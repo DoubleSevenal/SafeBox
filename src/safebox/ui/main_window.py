@@ -388,6 +388,8 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         back = QPushButton("返回列表")
         back.setObjectName("SubtleButton")
+        self.transfer_detail_attachments_button = QPushButton("查看附件")
+        self.transfer_detail_attachments_button.setObjectName("SubtleButton")
         self.transfer_detail_title = QLabel("传输记录")
         self.transfer_detail_title.setObjectName("HeroTitle")
         self.transfer_detail_meta = QLabel("")
@@ -400,6 +402,7 @@ class MainWindow(QMainWindow):
         self.transfer_detail_body.setReadOnly(True)
         top.addWidget(back)
         top.addStretch()
+        top.addWidget(self.transfer_detail_attachments_button)
         hero = QFrame()
         hero.setObjectName("DetailHero")
         hero_layout = QVBoxLayout(hero)
@@ -412,6 +415,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.transfer_detail_body, 1)
 
         back.clicked.connect(self._show_transfer_list_page)
+        self.transfer_detail_attachments_button.clicked.connect(
+            self._show_current_transfer_attachments
+        )
         return page
 
     def _build_transfer_chat_page(self) -> QWidget:
@@ -425,6 +431,7 @@ class MainWindow(QMainWindow):
         self.transfer_organize_button.setObjectName("SubtleButton")
         self.transfer_organize_menu = QMenu(self)
         export_note_action = self.transfer_organize_menu.addAction("转存为小纸条")
+        show_attachments_action = self.transfer_organize_menu.addAction("查看附件")
         close_chat_action = self.transfer_organize_menu.addAction("关闭此次对话")
         self.transfer_organize_button.setMenu(self.transfer_organize_menu)
         self.transfer_close_button = QPushButton("关闭此次对话")
@@ -463,6 +470,7 @@ class MainWindow(QMainWindow):
 
         back.clicked.connect(self._show_transfer_list_page)
         export_note_action.triggered.connect(self._export_current_transfer_to_note)
+        show_attachments_action.triggered.connect(self._show_current_transfer_attachments)
         close_chat_action.triggered.connect(self._close_current_transfer_chat)
         self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
         self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
@@ -1161,8 +1169,45 @@ class MainWindow(QMainWindow):
         lines: list[str] = []
         for message in self.service.list_transfer_messages(conversation_id):
             sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
-            lines.append(f"{sender} {message.created_at}\n{message.text}")
+            content = message.text or self._transfer_message_attachment_label(
+                conversation_id,
+                message.attachment_id,
+            )
+            lines.append(f"{sender} {message.created_at}\n{content}")
         return "\n\n".join(lines)
+
+    def _show_current_transfer_attachments(self) -> None:
+        if not self.current_transfer_id:
+            return
+        summary = self._format_transfer_attachments(self.current_transfer_id)
+        if self.pages.currentWidget() == self.transfer_chat_page:
+            self.transfer_chat_meta.setText(
+                f"{self._transfer_chat_meta(self.current_transfer_id)} · {summary}"
+            )
+        else:
+            self.transfer_detail_notice.setText(summary)
+
+    def _format_transfer_attachments(self, conversation_id: str) -> str:
+        attachments = self.service.list_transfer_attachments(conversation_id)
+        if not attachments:
+            return "当前会话没有附件"
+        lines = ["附件列表"]
+        for attachment in attachments:
+            lines.append(
+                f"{attachment.filename} · {attachment.mime_type or '未知类型'} · "
+                f"{_format_size_bytes(attachment.size_bytes)}"
+            )
+        return "\n".join(lines)
+
+    def _transfer_message_attachment_label(
+        self,
+        conversation_id: str,
+        attachment_id: str,
+    ) -> str:
+        for attachment in self.service.list_transfer_attachments(conversation_id):
+            if attachment.id == attachment_id:
+                return f"[附件] {attachment.filename}"
+        return "[附件] 未知附件"
 
     def _transfer_chat_meta(self, conversation_id: str) -> str:
         conversation = self.service.get_transfer_conversation(conversation_id)
@@ -1734,6 +1779,14 @@ def _transfer_status_label(status: str) -> str:
         "transferred": "已转存",
     }
     return labels.get(status, status)
+
+
+def _format_size_bytes(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / 1024 / 1024:.1f} MB"
 
 
 def _with_note_source(note_html: str, source: str) -> str:

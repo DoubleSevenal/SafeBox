@@ -5,7 +5,7 @@ from pathlib import Path
 
 from safebox.core.crypto import CryptoBox
 from safebox.core.models import Record
-from safebox.core.transfer import TransferConversation, TransferMessage
+from safebox.core.transfer import TransferAttachment, TransferConversation, TransferMessage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS vault_meta (
@@ -37,6 +37,15 @@ CREATE TABLE IF NOT EXISTS transfer_messages (
     conversation_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     sender TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    encrypted_payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transfer_attachments (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    filename_index TEXT NOT NULL,
     created_at TEXT NOT NULL,
     encrypted_payload TEXT NOT NULL
 );
@@ -200,6 +209,49 @@ class VaultStore:
         rows = self._load_transfer_message_rows()
         return [TransferMessage.from_dict(box.decrypt_json(row[0])) for row in rows]
 
+    def upsert_transfer_attachment(
+        self,
+        box: CryptoBox,
+        attachment: TransferAttachment,
+    ) -> None:
+        encrypted = box.encrypt_json(attachment.to_dict())
+        with self._connect() as con:
+            con.executescript(SCHEMA)
+            con.execute(
+                """
+                INSERT INTO transfer_attachments(
+                    id, conversation_id, message_id, filename_index, created_at, encrypted_payload
+                )
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    message_id = excluded.message_id,
+                    filename_index = excluded.filename_index,
+                    created_at = excluded.created_at,
+                    encrypted_payload = excluded.encrypted_payload
+                """,
+                (
+                    attachment.id,
+                    attachment.conversation_id,
+                    attachment.message_id,
+                    attachment.filename.casefold(),
+                    attachment.created_at,
+                    encrypted,
+                ),
+            )
+
+    def load_transfer_attachments(
+        self,
+        box: CryptoBox,
+        conversation_id: str,
+    ) -> list[TransferAttachment]:
+        rows = self._load_transfer_attachment_rows(conversation_id)
+        return [TransferAttachment.from_dict(box.decrypt_json(row[0])) for row in rows]
+
+    def load_all_transfer_attachments(self, box: CryptoBox) -> list[TransferAttachment]:
+        rows = self._load_transfer_attachment_rows()
+        return [TransferAttachment.from_dict(box.decrypt_json(row[0])) for row in rows]
+
     def _load_transfer_message_rows(
         self,
         conversation_id: str = "",
@@ -218,6 +270,26 @@ class VaultStore:
                 ).fetchall()
             return con.execute(
                 "SELECT encrypted_payload FROM transfer_messages ORDER BY created_at ASC"
+            ).fetchall()
+
+    def _load_transfer_attachment_rows(
+        self,
+        conversation_id: str = "",
+    ) -> list[sqlite3.Row]:
+        with self._connect() as con:
+            con.executescript(SCHEMA)
+            if conversation_id:
+                return con.execute(
+                    """
+                    SELECT encrypted_payload
+                    FROM transfer_attachments
+                    WHERE conversation_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (conversation_id,),
+                ).fetchall()
+            return con.execute(
+                "SELECT encrypted_payload FROM transfer_attachments ORDER BY created_at ASC"
             ).fetchall()
 
     def _connect(self) -> sqlite3.Connection:

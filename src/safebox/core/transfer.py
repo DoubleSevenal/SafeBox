@@ -88,3 +88,30 @@ class TransferMessage:
         clean.setdefault("edited_at", "")
         clean.setdefault("deleted_at", "")
         return cls(**clean)
+
+
+@dataclass(slots=True)
+class TransferAttachment:
+    id: str
+    conversation_id: str
+    message_id: str
+    filename: str
+    mime_type: str = ""
+    size_bytes: int = 0
+    storage_path: str = ""
+    sha256: str = ""
+    created_at: str = ""
+    deleted_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TransferAttachment:
+        clean = dict(data)
+        clean.setdefault("mime_type", "")
+        clean.setdefault("size_bytes", 0)
+        clean.setdefault("storage_path", "")
+        clean.setdefault("sha256", "")
+        clean.setdefault("deleted_at", "")
+        return cls(**clean)
