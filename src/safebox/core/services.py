@@ -383,6 +383,34 @@ class VaultService:
             if not message.deleted_at
         ]
 
+    def edit_transfer_text_message(
+        self,
+        conversation_id: str,
+        message_id: str,
+        *,
+        text: str,
+    ) -> TransferMessage:
+        clean_text = text.strip()
+        if not clean_text:
+            raise ValueError("Message text is required")
+        conversation = self.get_transfer_conversation(conversation_id)
+        if conversation.status == TransferConversationStatus.CLOSED:
+            raise ValueError("Transfer conversation is closed")
+        messages = self.list_transfer_messages(conversation.id)
+        message = next((item for item in messages if item.id == message_id), None)
+        if message is None:
+            raise KeyError(message_id)
+        if message.kind != TransferMessageKind.TEXT:
+            raise ValueError("Only text messages can be edited")
+        now = _now()
+        message.text = clean_text
+        message.edited_at = now
+        message.updated_at = now
+        conversation.updated_at = now
+        self._save_transfer_message(message)
+        self._save_transfer_conversation(conversation)
+        return message
+
     def list_transfer_attachments(self, conversation_id: str) -> list[TransferAttachment]:
         self.get_transfer_conversation(conversation_id)
         return [
