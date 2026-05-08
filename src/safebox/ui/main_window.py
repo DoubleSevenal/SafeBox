@@ -104,6 +104,7 @@ class MainWindow(QMainWindow):
         self.active_nav_key = ""
         self.account_editing = False
         self.note_editing = False
+        self._loading_note_detail = False
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
         self.note_format_buttons: list[QPushButton | QComboBox] = []
         self.note_format_brush: QTextCharFormat | None = None
@@ -646,6 +647,7 @@ class MainWindow(QMainWindow):
         self.note_category = QComboBox()
         self.note_category.setEditable(True)
         self.note_category.addItems(NOTE_CATEGORIES)
+        self.note_category.setFixedWidth(150)
         self.note_source_info = QLabel("")
         self.note_source_info.setObjectName("SourceNotice")
         self.note_source_info.setVisible(False)
@@ -727,9 +729,12 @@ class MainWindow(QMainWindow):
             color_green,
             color_orange,
         ]
+        note_title_row = QHBoxLayout()
+        note_title_row.setSpacing(10)
+        note_title_row.addWidget(self.note_title_input, 1)
+        note_title_row.addWidget(self.note_category, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(top)
-        layout.addWidget(self.note_title_input)
-        layout.addWidget(self.note_category)
+        layout.addLayout(note_title_row)
         layout.addWidget(self.note_source_info)
         layout.addWidget(self.note_save_notice)
         layout.addLayout(toolbar)
@@ -739,6 +744,11 @@ class MainWindow(QMainWindow):
         self.note_edit_button.clicked.connect(self._enter_note_edit_mode)
         self.note_attachments_button.clicked.connect(self._show_current_note_attachments)
         self.note_save_button.clicked.connect(self._save_current_note)
+        self.note_category.activated.connect(lambda _: self._save_current_note_category())
+        if self.note_category.lineEdit() is not None:
+            self.note_category.lineEdit().editingFinished.connect(
+                self._save_current_note_category
+            )
         delete.clicked.connect(self._delete_current_note)
         bold.clicked.connect(lambda: self._toggle_text_property("bold"))
         italic.clicked.connect(lambda: self._toggle_text_property("italic"))
@@ -2095,9 +2105,12 @@ class MainWindow(QMainWindow):
             self._refresh_notes()
 
     def _render_note_detail(self, record: Record) -> None:
+        self._loading_note_detail = True
         self.note_title_input.setText(record.name)
         self.note_category.setCurrentText(record.category)
+        self._apply_note_category_style(record.category)
         self.note_body.setHtml(record.note)
+        self._loading_note_detail = False
         self._show_note_source_info(record.note)
         self.note_attachments_button.setVisible(
             bool(self._transfer_conversation_for_note(record.id))
@@ -2228,6 +2241,30 @@ class MainWindow(QMainWindow):
         self._refresh_notes()
         self._show_note_save_notice("保存成功")
 
+    def _save_current_note_category(self) -> None:
+        if self._loading_note_detail or not self.current_note_id:
+            return
+        record = self.service.get_record(self.current_note_id)
+        category = self.note_category.currentText().strip()
+        if not category or category == record.category:
+            return
+        updated = self.service.update_secure_note(
+            self.current_note_id,
+            name=record.name,
+            note=record.note,
+            category=category,
+        )
+        self._loading_note_detail = True
+        self.note_category.setCurrentText(updated.category)
+        self._apply_note_category_style(updated.category)
+        self._loading_note_detail = False
+        self._refresh_notes()
+        self._show_note_save_notice("分类已更新")
+
+    def _apply_note_category_style(self, category: str) -> None:
+        self.note_category.setObjectName(f"CategoryPillCombo_{_category_color_key(category)}")
+        self._refresh_button_style(self.note_category)
+
     def _enter_note_edit_mode(self) -> None:
         self._set_note_edit_mode(True)
 
@@ -2236,7 +2273,7 @@ class MainWindow(QMainWindow):
         if not editing:
             self.note_format_brush = None
         self.note_title_input.setReadOnly(not editing)
-        self.note_category.setEnabled(editing)
+        self.note_category.setEnabled(True)
         self.note_body.setReadOnly(not editing)
         self.note_save_button.setVisible(editing)
         self.note_edit_button.setVisible(not editing)
@@ -2717,6 +2754,26 @@ class TransferMessageItem(QWidget):
 
 
 def _category_color_key(category: str) -> str:
+    fixed_colors = {
+        "邮箱": "Blue",
+        "学校": "Mint",
+        "工作": "Sky",
+        "游戏": "Lavender",
+        "生活": "Pink",
+        "软件": "Cyan",
+        "收件箱": "Blue",
+        "会话": "Lavender",
+        "MD": "Mint",
+        "TXT": "Cyan",
+        "其他": "Peach",
+        "进行中": "Mint",
+        "待整理": "Sky",
+        "已转存": "Lavender",
+        "已关闭": "Peach",
+        "已关闭 · 已转存": "Lavender",
+    }
+    if category in fixed_colors:
+        return fixed_colors[category]
     palette = ["Blue", "Pink", "Cyan", "Mint", "Lavender", "Peach", "Sky"]
     index = sum(ord(ch) for ch in category) % len(palette)
     return palette[index]

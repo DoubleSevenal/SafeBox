@@ -530,6 +530,108 @@ QComboBox#FontSizeCombo::down-arrow {
     height: 12px;
     margin-right: 6px;
 }
+QComboBox#CategoryPillCombo_Blue,
+QComboBox#CategoryPillCombo_Pink,
+QComboBox#CategoryPillCombo_Cyan,
+QComboBox#CategoryPillCombo_Mint,
+QComboBox#CategoryPillCombo_Lavender,
+QComboBox#CategoryPillCombo_Peach,
+QComboBox#CategoryPillCombo_Sky {
+    min-width: 118px;
+    max-width: 150px;
+    min-height: 36px;
+    border-radius: 18px;
+    font-size: 14px;
+    font-weight: 750;
+    padding: 5px 34px 5px 14px;
+}
+QComboBox#CategoryPillCombo_Blue {
+    color: #1d4ed8;
+    background: #dbeafe;
+    border: 1px solid #bfdbfe;
+}
+QComboBox#CategoryPillCombo_Pink {
+    color: #be185d;
+    background: #fce7f3;
+    border: 1px solid #fbcfe8;
+}
+QComboBox#CategoryPillCombo_Cyan {
+    color: #0e7490;
+    background: #cffafe;
+    border: 1px solid #a5f3fc;
+}
+QComboBox#CategoryPillCombo_Mint {
+    color: #047857;
+    background: #d1fae5;
+    border: 1px solid #a7f3d0;
+}
+QComboBox#CategoryPillCombo_Lavender {
+    color: #6d28d9;
+    background: #ede9fe;
+    border: 1px solid #ddd6fe;
+}
+QComboBox#CategoryPillCombo_Peach {
+    color: #c2410c;
+    background: #ffedd5;
+    border: 1px solid #fed7aa;
+}
+QComboBox#CategoryPillCombo_Sky {
+    color: #0369a1;
+    background: #e0f2fe;
+    border: 1px solid #bae6fd;
+}
+QComboBox#CategoryPillCombo_Blue:hover,
+QComboBox#CategoryPillCombo_Pink:hover,
+QComboBox#CategoryPillCombo_Cyan:hover,
+QComboBox#CategoryPillCombo_Mint:hover,
+QComboBox#CategoryPillCombo_Lavender:hover,
+QComboBox#CategoryPillCombo_Peach:hover,
+QComboBox#CategoryPillCombo_Sky:hover {
+    border-color: #60a5fa;
+}
+QComboBox#CategoryPillCombo_Blue:focus,
+QComboBox#CategoryPillCombo_Pink:focus,
+QComboBox#CategoryPillCombo_Cyan:focus,
+QComboBox#CategoryPillCombo_Mint:focus,
+QComboBox#CategoryPillCombo_Lavender:focus,
+QComboBox#CategoryPillCombo_Peach:focus,
+QComboBox#CategoryPillCombo_Sky:focus {
+    border-color: #2563eb;
+}
+QComboBox#CategoryPillCombo_Blue::drop-down,
+QComboBox#CategoryPillCombo_Pink::drop-down,
+QComboBox#CategoryPillCombo_Cyan::drop-down,
+QComboBox#CategoryPillCombo_Mint::drop-down,
+QComboBox#CategoryPillCombo_Lavender::drop-down,
+QComboBox#CategoryPillCombo_Peach::drop-down,
+QComboBox#CategoryPillCombo_Sky::drop-down {
+    width: 28px;
+    border: 0;
+    border-top-right-radius: 18px;
+    border-bottom-right-radius: 18px;
+    background: rgba(255,255,255,.28);
+}
+QComboBox#CategoryPillCombo_Blue::drop-down:hover,
+QComboBox#CategoryPillCombo_Pink::drop-down:hover,
+QComboBox#CategoryPillCombo_Cyan::drop-down:hover,
+QComboBox#CategoryPillCombo_Mint::drop-down:hover,
+QComboBox#CategoryPillCombo_Lavender::drop-down:hover,
+QComboBox#CategoryPillCombo_Peach::drop-down:hover,
+QComboBox#CategoryPillCombo_Sky::drop-down:hover {
+    background: rgba(255,255,255,.5);
+}
+QComboBox#CategoryPillCombo_Blue::down-arrow,
+QComboBox#CategoryPillCombo_Pink::down-arrow,
+QComboBox#CategoryPillCombo_Cyan::down-arrow,
+QComboBox#CategoryPillCombo_Mint::down-arrow,
+QComboBox#CategoryPillCombo_Lavender::down-arrow,
+QComboBox#CategoryPillCombo_Peach::down-arrow,
+QComboBox#CategoryPillCombo_Sky::down-arrow {
+    image: url(__CHEVRON_DOWN_ICON__);
+    width: 13px;
+    height: 13px;
+    margin-right: 8px;
+}
 QComboBox {
     padding-right: 38px;
 }
@@ -559,6 +661,35 @@ QComboBox QAbstractItemView {
     selection-color: #0f172a;
     padding: 6px;
     font-size: 15px;
+}
+QMenu {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 5px;
+}
+QMenu::item {
+    min-height: 30px;
+    padding: 6px 34px 6px 28px;
+    border-radius: 7px;
+    color: #172033;
+}
+QMenu::item:selected {
+    background: #dbeafe;
+    color: #0f172a;
+}
+QMenu::item:pressed {
+    background: #bfdbfe;
+    color: #0f172a;
+}
+QMenu::item:disabled {
+    color: #94a3b8;
+    background: transparent;
+}
+QMenu::separator {
+    height: 1px;
+    background: #e2e8f0;
+    margin: 5px 8px;
 }
 QListWidget {
     border: 0;
