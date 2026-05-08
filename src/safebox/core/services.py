@@ -155,24 +155,21 @@ class VaultService:
         return record
 
     def search(self, query: str = "") -> list[RecordSummary]:
-        records = [record for record in self._load_all() if not record.deleted_at]
+        records = self.active_records()
         term = query.casefold().strip()
         if term:
             records = [
                 record
                 for record in records
-                if term
-                in " ".join(
-                    [
-                        record.name,
-                        record.account,
-                        record.category,
-                        record.note,
-                        record.entry_hint,
-                    ]
-                ).casefold()
+                if term in _record_search_text(record)
             ]
         return [self._summary(record) for record in records]
+
+    def active_records(self) -> list[Record]:
+        return [record for record in self._load_all() if not record.deleted_at]
+
+    def summary_for(self, record: Record) -> RecordSummary:
+        return self._summary(record)
 
     def trash(self) -> list[RecordSummary]:
         return [self._summary(record) for record in self._load_all() if record.deleted_at]
@@ -642,6 +639,18 @@ def _unique_download_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
         index += 1
+
+
+def _record_search_text(record: Record) -> str:
+    return " ".join(
+        [
+            record.name,
+            record.account,
+            record.category,
+            record.note,
+            record.entry_hint,
+        ]
+    ).casefold()
 
 
 def _transfer_conversation_is_open(conversation: TransferConversation) -> bool:

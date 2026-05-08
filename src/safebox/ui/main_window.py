@@ -100,6 +100,8 @@ class MainWindow(QMainWindow):
         self.current_note_id = ""
         self.current_transfer_id = ""
         self.transfer_server: TransferHttpServer | None = None
+        self.transfer_messages_signature = ""
+        self.active_nav_key = ""
         self.account_editing = False
         self.note_editing = False
         self.account_edit_widgets: dict[str, QLineEdit | QTextEdit | QComboBox] = {}
@@ -935,7 +937,13 @@ class MainWindow(QMainWindow):
         self._set_nav(module)
         self.pages.setCurrentWidget(self.module_pages.get(module, default_page))
 
+    def _module_is_showing_list(self, module: str, list_page: QWidget) -> bool:
+        return self.module_pages.get(module, list_page) is list_page
+
     def _set_nav(self, active: str) -> None:
+        if self.active_nav_key == active:
+            return
+        self.active_nav_key = active
         pairs = {
             "accounts": self.accounts_nav,
             "notes": self.notes_nav,
@@ -950,7 +958,8 @@ class MainWindow(QMainWindow):
 
     def _show_accounts_page(self) -> None:
         self._show_module_page("accounts", self.accounts_page)
-        self._refresh_accounts()
+        if self._module_is_showing_list("accounts", self.accounts_page):
+            self._refresh_accounts()
 
     def _show_accounts_list_page(self) -> None:
         self._remember_module_page("accounts", self.accounts_page)
@@ -960,7 +969,8 @@ class MainWindow(QMainWindow):
 
     def _show_notes_page(self) -> None:
         self._show_module_page("notes", self.notes_page)
-        self._refresh_notes()
+        if self._module_is_showing_list("notes", self.notes_page):
+            self._refresh_notes()
 
     def _show_notes_list_page(self) -> None:
         self._remember_module_page("notes", self.notes_page)
@@ -970,10 +980,12 @@ class MainWindow(QMainWindow):
 
     def _show_transfer_page(self) -> None:
         self._show_module_page("transfer", self.transfer_page)
-        self._refresh_transfer_conversations()
+        if self._module_is_showing_list("transfer", self.transfer_page):
+            self._refresh_transfer_conversations()
 
     def _show_transfer_list_page(self) -> None:
         self.transfer_refresh_timer.stop()
+        self.transfer_messages_signature = ""
         self._remember_module_page("transfer", self.transfer_page)
         self._set_nav("transfer")
         self.pages.setCurrentWidget(self.transfer_page)
@@ -1149,86 +1161,116 @@ class MainWindow(QMainWindow):
 
     def _refresh_accounts(self) -> None:
         query = self.account_search.text().strip()
+        self.account_list.setUpdatesEnabled(False)
         self.account_list.clear()
-        all_summaries = self.service.search("")
-        summaries = [
-            summary for summary in self.service.search(query) if summary.type == RecordType.ACCOUNT
-        ]
-        sorted_accounts = sorted_summaries(summaries, self._selected_sort_mode(self.account_sort))
-        self._update_data_status("accounts", all_summaries, len(sorted_accounts))
-        if not sorted_accounts:
-            self._add_empty_record_item(
-                self.account_list,
-                "当前没有账号记录" if not query else "没有找到匹配的账号记录",
+        try:
+            records = self.service.active_records()
+            all_summaries = [self.service.summary_for(record) for record in records]
+            term = query.casefold()
+            summaries = [
+                self.service.summary_for(record)
+                for record in records
+                if record.type == RecordType.ACCOUNT
+                and (not term or term in _record_search_text(record))
+            ]
+            sorted_accounts = sorted_summaries(
+                summaries,
+                self._selected_sort_mode(self.account_sort),
             )
-            return
-        for summary in sorted_accounts:
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 74))
-            item.setData(Qt.ItemDataRole.UserRole, summary.id)
-            self.account_list.addItem(item)
-            self.account_list.setItemWidget(item, RecordListItem(summary, ""))
+            self._update_data_status("accounts", all_summaries, len(sorted_accounts))
+            if not sorted_accounts:
+                self._add_empty_record_item(
+                    self.account_list,
+                    "当前没有账号记录" if not query else "没有找到匹配的账号记录",
+                )
+                return
+            for summary in sorted_accounts:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 74))
+                item.setData(Qt.ItemDataRole.UserRole, summary.id)
+                self.account_list.addItem(item)
+                self.account_list.setItemWidget(item, RecordListItem(summary, ""))
+        finally:
+            self.account_list.setUpdatesEnabled(True)
+            self.account_list.viewport().update()
 
     def _refresh_notes(self) -> None:
         query = self.note_search.text().strip()
+        self.note_list.setUpdatesEnabled(False)
         self.note_list.clear()
-        all_summaries = self.service.search("")
-        summaries = [
-            summary
-            for summary in self.service.search(query)
-            if summary.type == RecordType.SECURE_NOTE
-        ]
-        sorted_notes = sorted_summaries(summaries, self._selected_sort_mode(self.note_sort))
-        self._update_data_status("notes", all_summaries, len(sorted_notes))
-        if not sorted_notes:
-            self._add_empty_record_item(
-                self.note_list,
-                "当前没有小纸条记录" if not query else "没有找到匹配的小纸条记录",
+        try:
+            records = self.service.active_records()
+            all_summaries = [self.service.summary_for(record) for record in records]
+            term = query.casefold()
+            note_records = [
+                record
+                for record in records
+                if record.type == RecordType.SECURE_NOTE
+                and (not term or term in _record_search_text(record))
+            ]
+            sorted_notes = sorted_summaries(
+                [self.service.summary_for(record) for record in note_records],
+                self._selected_sort_mode(self.note_sort),
             )
-            return
-        for summary in sorted_notes:
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 74))
-            item.setData(Qt.ItemDataRole.UserRole, summary.id)
-            self.note_list.addItem(item)
-            record = self.service.get_record(summary.id)
-            self.note_list.setItemWidget(
-                item,
-                RecordListItem(summary, note_plain_summary(record.note)),
-            )
+            notes_by_id = {record.id: record for record in note_records}
+            self._update_data_status("notes", all_summaries, len(sorted_notes))
+            if not sorted_notes:
+                self._add_empty_record_item(
+                    self.note_list,
+                    "当前没有小纸条记录" if not query else "没有找到匹配的小纸条记录",
+                )
+                return
+            for summary in sorted_notes:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 74))
+                item.setData(Qt.ItemDataRole.UserRole, summary.id)
+                self.note_list.addItem(item)
+                record = notes_by_id[summary.id]
+                self.note_list.setItemWidget(
+                    item,
+                    RecordListItem(summary, note_plain_summary(record.note)),
+                )
+        finally:
+            self.note_list.setUpdatesEnabled(True)
+            self.note_list.viewport().update()
 
     def _refresh_transfer_conversations(self) -> None:
         query = self.transfer_search.text().strip()
+        self.transfer_list.setUpdatesEnabled(False)
         self.transfer_list.clear()
-        conversations = self.service.list_transfer_conversations(query)
-        self.transfer_status.setText("")
-        self.transfer_status.setVisible(False)
-        if not conversations:
-            self._add_empty_record_item(
-                self.transfer_list,
-                "当前没有传输记录" if not query else "没有找到匹配的传输记录",
-            )
-            return
-        for conversation in conversations:
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 74))
-            item.setData(Qt.ItemDataRole.UserRole, conversation.id)
-            self.transfer_list.addItem(item)
-            summary = RecordSummary(
-                id=conversation.id,
-                type=RecordType.SECURE_NOTE,
-                name=conversation.title,
-                account=conversation.device_name,
-                category=self._transfer_conversation_status_label(conversation),
-                favorite=False,
-                created_at=conversation.created_at,
-                updated_at=conversation.updated_at,
-            )
-            subtitle = (
-                f"{conversation.device_name} · "
-                f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
-            )
-            self.transfer_list.setItemWidget(item, RecordListItem(summary, subtitle))
+        try:
+            conversations = self.service.list_transfer_conversations(query)
+            self.transfer_status.setText("")
+            self.transfer_status.setVisible(False)
+            if not conversations:
+                self._add_empty_record_item(
+                    self.transfer_list,
+                    "当前没有传输记录" if not query else "没有找到匹配的传输记录",
+                )
+                return
+            for conversation in conversations:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 74))
+                item.setData(Qt.ItemDataRole.UserRole, conversation.id)
+                self.transfer_list.addItem(item)
+                summary = RecordSummary(
+                    id=conversation.id,
+                    type=RecordType.SECURE_NOTE,
+                    name=conversation.title,
+                    account=conversation.device_name,
+                    category=self._transfer_conversation_status_label(conversation),
+                    favorite=False,
+                    created_at=conversation.created_at,
+                    updated_at=conversation.updated_at,
+                )
+                subtitle = (
+                    f"{conversation.device_name} · "
+                    f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
+                )
+                self.transfer_list.setItemWidget(item, RecordListItem(summary, subtitle))
+        finally:
+            self.transfer_list.setUpdatesEnabled(True)
+            self.transfer_list.viewport().update()
 
     def _open_transfer_item(self, item: QListWidgetItem) -> None:
         self.current_transfer_id = item.data(Qt.ItemDataRole.UserRole)
@@ -1265,6 +1307,8 @@ class MainWindow(QMainWindow):
         self._show_transfer_chat(self.transfer_server.conversation_id)
 
     def _show_transfer_chat(self, conversation_id: str) -> None:
+        if self.current_transfer_id != conversation_id:
+            self.transfer_messages_signature = ""
         self.current_transfer_id = conversation_id
         conversation = self.service.get_transfer_conversation(conversation_id)
         writable = self._transfer_conversation_is_open(conversation)
@@ -1496,12 +1540,29 @@ class MainWindow(QMainWindow):
     def _render_transfer_messages(self, conversation_id: str) -> None:
         messages = self.service.list_transfer_messages(conversation_id)
         attachments = self.service.list_transfer_attachments(conversation_id)
+        signature = self._transfer_messages_signature(messages, attachments)
+        if signature == self.transfer_messages_signature:
+            return
+        self.transfer_messages_signature = signature
         self.transfer_messages_view.set_messages(
             messages,
             {attachment.id: attachment.filename for attachment in attachments},
             preview_attachment=self._preview_transfer_attachment_by_id,
             download_attachment=self._download_transfer_attachment_by_id,
         )
+
+    def _transfer_messages_signature(self, messages, attachments) -> str:
+        message_parts = [
+            f"{message.id}:{message.updated_at}:{message.edited_at}:{message.text}:"
+            f"{message.attachment_id}"
+            for message in messages
+        ]
+        attachment_parts = [
+            f"{attachment.id}:{attachment.filename}:{attachment.size_bytes}:"
+            f"{attachment.storage_path}"
+            for attachment in attachments
+        ]
+        return "|".join([*message_parts, *attachment_parts])
 
     def _show_current_transfer_attachments(self) -> None:
         if not self.current_transfer_id:
@@ -2321,6 +2382,7 @@ class MainWindow(QMainWindow):
         self.current_account_id = ""
         self.current_note_id = ""
         self.current_transfer_id = ""
+        self.transfer_messages_signature = ""
         self._reset_module_pages()
         self._open_vault()
 
@@ -2579,6 +2641,18 @@ def _guess_mime_type(path: Path) -> str:
         ".ppt": "application/vnd.ms-powerpoint",
         ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }.get(suffix, "application/octet-stream")
+
+
+def _record_search_text(record: Record) -> str:
+    return " ".join(
+        [
+            record.name,
+            record.account,
+            record.category,
+            record.note,
+            record.entry_hint,
+        ]
+    ).casefold()
 
 
 def _with_note_source(note_html: str, source: str) -> str:
