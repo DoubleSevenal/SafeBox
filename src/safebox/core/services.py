@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from shutil import copy2
 from uuid import uuid4
 
 from safebox.core.crypto import CryptoBox, InvalidPasswordError
@@ -393,6 +394,30 @@ class VaultService:
             if not attachment.deleted_at
         ]
 
+    def download_transfer_attachment(
+        self,
+        *,
+        conversation_id: str,
+        attachment_id: str,
+        download_dir: Path,
+    ) -> DownloadHistoryRecord:
+        attachment = self._get_transfer_attachment(conversation_id, attachment_id)
+        source = Path(attachment.storage_path)
+        if not source.exists():
+            raise FileNotFoundError(source)
+        target_dir = Path(download_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = _unique_download_path(target_dir / attachment.filename)
+        copy2(source, target)
+        return self.record_transfer_download(
+            conversation_id=conversation_id,
+            message_id=attachment.message_id,
+            attachment_id=attachment.id,
+            filename=attachment.filename,
+            saved_path=target,
+            size_bytes=target.stat().st_size,
+        )
+
     def record_transfer_download(
         self,
         *,
@@ -437,6 +462,16 @@ class VaultService:
         for record in self.list_download_history():
             record.deleted_at = _now()
             self._save_download_history_record(record)
+
+    def _get_transfer_attachment(
+        self,
+        conversation_id: str,
+        attachment_id: str,
+    ) -> TransferAttachment:
+        for attachment in self.list_transfer_attachments(conversation_id):
+            if attachment.id == attachment_id:
+                return attachment
+        raise KeyError(attachment_id)
 
     def export_transfer_conversation_to_note(self, conversation_id: str) -> Record:
         conversation = self.get_transfer_conversation(conversation_id)
@@ -544,6 +579,20 @@ def _now() -> str:
 
 def _clean_category(category: str) -> str:
     return category.strip() or "其他"
+
+
+def _unique_download_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    index = 1
+    while True:
+        candidate = parent / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
 
 
 def try_unlock(service: VaultService, master_password: str) -> UnlockResult:

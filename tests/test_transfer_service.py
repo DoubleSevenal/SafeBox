@@ -355,6 +355,105 @@ def test_change_master_password_reencrypts_download_history(vault_path, tmp_path
     assert [item.filename for item in service.list_download_history()] == ["invoice.pdf"]
 
 
+def test_service_downloads_attachment_and_records_history(vault_path, tmp_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    source = tmp_path / "source" / "invoice.pdf"
+    source.parent.mkdir()
+    source.write_text("pdf data", encoding="utf-8")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    message, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+
+    record = service.download_transfer_attachment(
+        conversation_id=conversation.id,
+        attachment_id=attachment.id,
+        download_dir=tmp_path / "downloads",
+    )
+
+    saved_path = tmp_path / "downloads" / "invoice.pdf"
+    assert saved_path.read_text(encoding="utf-8") == "pdf data"
+    assert record.message_id == message.id
+    assert record.saved_path == str(saved_path)
+    assert service.list_download_history()[0].exists is True
+
+
+def test_service_downloads_attachment_with_auto_rename(vault_path, tmp_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    source = tmp_path / "source" / "invoice.pdf"
+    source.parent.mkdir()
+    source.write_text("new pdf", encoding="utf-8")
+    download_dir = tmp_path / "downloads"
+    download_dir.mkdir()
+    (download_dir / "invoice.pdf").write_text("old pdf", encoding="utf-8")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    _, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+
+    record = service.download_transfer_attachment(
+        conversation_id=conversation.id,
+        attachment_id=attachment.id,
+        download_dir=download_dir,
+    )
+
+    assert (download_dir / "invoice.pdf").read_text(encoding="utf-8") == "old pdf"
+    assert (download_dir / "invoice (1).pdf").read_text(encoding="utf-8") == "new pdf"
+    assert record.filename == "invoice.pdf"
+    assert record.saved_path == str(download_dir / "invoice (1).pdf")
+
+
+def test_service_download_missing_attachment_source_raises(vault_path, tmp_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    _, attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=4096,
+        storage_path=str(tmp_path / "missing.pdf"),
+        sha256="abc123",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        service.download_transfer_attachment(
+            conversation_id=conversation.id,
+            attachment_id=attachment.id,
+            download_dir=tmp_path / "downloads",
+        )
+
+
 def test_transfer_conversation_exports_to_session_note(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")

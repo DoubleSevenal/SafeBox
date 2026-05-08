@@ -434,6 +434,7 @@ class MainWindow(QMainWindow):
         self.transfer_organize_menu = QMenu(self)
         export_note_action = self.transfer_organize_menu.addAction("转存为小纸条")
         show_attachments_action = self.transfer_organize_menu.addAction("查看附件")
+        download_attachments_action = self.transfer_organize_menu.addAction("下载全部附件")
         close_chat_action = self.transfer_organize_menu.addAction("关闭此次对话")
         self.transfer_organize_button.setMenu(self.transfer_organize_menu)
         self.transfer_close_button = QPushButton("关闭此次对话")
@@ -473,6 +474,7 @@ class MainWindow(QMainWindow):
         back.clicked.connect(self._show_transfer_list_page)
         export_note_action.triggered.connect(self._export_current_transfer_to_note)
         show_attachments_action.triggered.connect(self._show_current_transfer_attachments)
+        download_attachments_action.triggered.connect(self._download_current_transfer_attachments)
         close_chat_action.triggered.connect(self._close_current_transfer_chat)
         self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
         self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
@@ -1250,6 +1252,26 @@ class MainWindow(QMainWindow):
             )
         else:
             self.transfer_detail_notice.setText(summary)
+
+    def _download_current_transfer_attachments(self) -> None:
+        if not self.current_transfer_id:
+            return
+        attachments = self.service.list_transfer_attachments(self.current_transfer_id)
+        downloaded = 0
+        for attachment in attachments:
+            self.service.download_transfer_attachment(
+                conversation_id=self.current_transfer_id,
+                attachment_id=attachment.id,
+                download_dir=self.settings.transfer_download_dir,
+            )
+            downloaded += 1
+        message = f"已下载 {downloaded} 个附件"
+        if self.pages.currentWidget() == self.transfer_chat_page:
+            self.transfer_chat_meta.setText(
+                f"{self._transfer_chat_meta(self.current_transfer_id)} · {message}"
+            )
+        else:
+            self.transfer_detail_notice.setText(message)
 
     def _format_transfer_attachments(self, conversation_id: str) -> str:
         attachments = self.service.list_transfer_attachments(conversation_id)

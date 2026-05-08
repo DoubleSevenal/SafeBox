@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 from safebox.core.services import VaultService
@@ -500,6 +501,100 @@ def test_transfer_chat_shows_attachment_summary(
     assert window.pages.currentWidget() == window.transfer_chat_page
     assert "invoice.pdf" in window.transfer_chat_meta.text()
     assert "4.0 KB" in window.transfer_chat_meta.text()
+
+    window.close()
+
+
+def test_transfer_attachments_download_to_default_dir(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    source = tmp_path / "source" / "invoice.pdf"
+    source.parent.mkdir()
+    source.write_text("pdf data", encoding="utf-8")
+    download_dir = tmp_path / "downloads"
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window.settings = replace(window.settings, transfer_download_dir=download_dir)
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._download_current_transfer_attachments()
+
+    assert (download_dir / "invoice.pdf").read_text(encoding="utf-8") == "pdf data"
+    assert "已下载 1 个附件" in window.transfer_chat_meta.text()
+    assert window.service.list_download_history()[0].filename == "invoice.pdf"
+
+    window.close()
+
+
+def test_transfer_detail_downloads_attachments(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    source = tmp_path / "source" / "invoice.pdf"
+    source.parent.mkdir()
+    source.write_text("pdf data", encoding="utf-8")
+    download_dir = tmp_path / "downloads"
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+    service.close_transfer_conversation(conversation.id)
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window.settings = replace(window.settings, transfer_download_dir=download_dir)
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._download_current_transfer_attachments()
+
+    assert (download_dir / "invoice.pdf").exists()
+    assert window.transfer_detail_notice.text() == "已下载 1 个附件"
 
     window.close()
 
