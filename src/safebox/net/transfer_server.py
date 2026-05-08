@@ -78,6 +78,7 @@ MOBILE_PAGE = """<!doctype html>
       border-radius: 14px;
       background: #ffffff;
     }
+    .hidden { display: none; }
     input[type="text"] {
       box-sizing: border-box;
       width: 160px;
@@ -93,7 +94,7 @@ MOBILE_PAGE = """<!doctype html>
 <body>
   <main>
     <h1>传输助手</h1>
-    <div class="pair">
+    <div id="pairBox" class="pair">
       <input id="code" type="text" inputmode="numeric" placeholder="验证码">
       <button onclick="pairDevice()">验证</button>
     </div>
@@ -111,6 +112,21 @@ MOBILE_PAGE = """<!doctype html>
     <div id="status"></div>
   </main>
   <script>
+    let paired = false;
+
+    function setPaired(nextPaired) {
+      paired = nextPaired;
+      document.getElementById('pairBox').className = paired ? 'pair hidden' : 'pair';
+    }
+
+    async function initSession() {
+      const response = await fetch('/api/session');
+      if (!response.ok) return;
+      const session = await response.json();
+      setPaired(session.paired);
+      if (paired) loadMessages();
+    }
+
     async function pairDevice() {
       const code = document.getElementById('code').value;
       const response = await fetch('/api/pair', {
@@ -119,7 +135,14 @@ MOBILE_PAGE = """<!doctype html>
         body: JSON.stringify({code})
       });
       document.getElementById('status').textContent = response.ok ? '验证成功' : '验证码错误';
-      if (response.ok) loadMessages();
+      if (response.ok) {
+        setPaired(true);
+        loadMessages();
+      }
+    }
+    function refreshAfterWrite() {
+      loadMessages();
+      initSession();
     }
     async function sendText() {
       const text = document.getElementById('text').value;
@@ -129,7 +152,10 @@ MOBILE_PAGE = """<!doctype html>
         body: JSON.stringify({text})
       });
       document.getElementById('status').textContent = response.ok ? '已发送' : '发送失败';
-      if (response.ok) document.getElementById('text').value = '';
+      if (response.ok) {
+        document.getElementById('text').value = '';
+        refreshAfterWrite();
+      }
     }
     async function uploadFile() {
       const file = document.getElementById('file').files[0];
@@ -141,11 +167,15 @@ MOBILE_PAGE = """<!doctype html>
       data.append('file', file);
       const response = await fetch('/api/uploads', { method: 'POST', body: data });
       document.getElementById('status').textContent = response.ok ? '已上传' : '上传失败';
-      if (response.ok) document.getElementById('file').value = '';
+      if (response.ok) {
+        document.getElementById('file').value = '';
+        refreshAfterWrite();
+      }
     }
     async function closeConversation() {
       const response = await fetch('/api/close', { method: 'POST' });
       document.getElementById('status').textContent = response.ok ? '会话已结束' : '结束失败';
+      if (response.ok) refreshAfterWrite();
     }
     async function loadMessages() {
       const response = await fetch('/api/messages');
@@ -166,6 +196,7 @@ MOBILE_PAGE = """<!doctype html>
         messages.appendChild(row);
       }
     }
+    initSession();
     setInterval(loadMessages, 1500);
   </script>
 </body>

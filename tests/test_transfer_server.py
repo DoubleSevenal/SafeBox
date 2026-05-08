@@ -100,6 +100,8 @@ def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     assert "上传附件" in html
     assert "验证码" in html
     assert "验证" in html
+    assert "initSession()" in html
+    assert "refreshAfterWrite()" in html
     assert session["conversation_id"] == server.conversation_id
     assert session["device_name"] == "手机浏览器"
     assert session["paired"] is False
