@@ -9,6 +9,20 @@ from safebox.core.transfer import TransferMessageKind, TransferMessageSender
 from safebox.net.transfer_server import TransferHttpServer, lan_ip_address
 
 
+def _test_server(
+    service: VaultService,
+    *,
+    verification_code: str = "",
+    lan_ip_provider=lan_ip_address,
+) -> TransferHttpServer:
+    return TransferHttpServer(
+        service,
+        host="127.0.0.1",
+        verification_code=verification_code,
+        lan_ip_provider=lan_ip_provider,
+    )
+
+
 def _request_json(url: str, payload: dict[str, str]) -> dict:
     request = Request(
         url,
@@ -108,7 +122,7 @@ def _multipart_file(filename: str, content: bytes, mime_type: str) -> tuple[byte
 def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -136,7 +150,7 @@ def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
 def test_transfer_server_exposes_display_url_with_lan_ip(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, lan_ip_provider=lambda: "192.168.1.8")
+    server = _test_server(service, lan_ip_provider=lambda: "192.168.1.8")
 
     server.start()
     try:
@@ -151,7 +165,7 @@ def test_transfer_server_exposes_display_url_with_lan_ip(vault_path) -> None:
 def test_transfer_server_display_url_falls_back_to_local_url(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, lan_ip_provider=lambda: "")
+    server = _test_server(service, lan_ip_provider=lambda: "")
 
     server.start()
     try:
@@ -179,7 +193,7 @@ def test_lan_ip_address_returns_empty_when_probe_fails(monkeypatch) -> None:
 def test_transfer_server_accepts_phone_text_message(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -198,7 +212,7 @@ def test_transfer_server_accepts_phone_text_message(vault_path) -> None:
 def test_transfer_server_rejects_message_before_pairing(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -213,7 +227,7 @@ def test_transfer_server_rejects_message_before_pairing(vault_path) -> None:
 def test_transfer_server_pairs_with_verification_code(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -235,7 +249,7 @@ def test_transfer_server_pairs_with_verification_code(vault_path) -> None:
 def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -268,7 +282,7 @@ def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
 def test_transfer_server_edits_text_message_for_paired_phone(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -297,7 +311,7 @@ def test_transfer_server_edits_text_message_for_paired_phone(vault_path) -> None
 def test_transfer_server_rejects_text_edit_before_pairing(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -323,7 +337,7 @@ def test_transfer_server_rejects_text_edit_before_pairing(vault_path) -> None:
 def test_transfer_server_rejects_message_list_before_pairing(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -342,7 +356,7 @@ def test_transfer_server_rejects_message_list_before_pairing(vault_path) -> None
 def test_transfer_server_closes_conversation_from_paired_phone(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -367,7 +381,7 @@ def test_transfer_server_closes_conversation_from_paired_phone(vault_path) -> No
 def test_transfer_server_rejects_close_before_pairing(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -384,7 +398,7 @@ def test_transfer_server_rejects_close_before_pairing(vault_path) -> None:
 def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -399,7 +413,7 @@ def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
 def test_transfer_server_accepts_file_upload(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -430,7 +444,7 @@ def test_transfer_server_accepts_file_upload(vault_path) -> None:
 def test_transfer_server_rejects_upload_before_pairing(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -451,7 +465,7 @@ def test_transfer_server_rejects_upload_before_pairing(vault_path) -> None:
 def test_transfer_server_rejects_upload_after_close_without_saving_file(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
@@ -476,7 +490,7 @@ def test_transfer_server_rejects_upload_after_close_without_saving_file(vault_pa
 def test_transfer_server_treats_uploaded_image_as_image_message(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service, verification_code="123456")
+    server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
