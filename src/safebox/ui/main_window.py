@@ -135,6 +135,8 @@ class MainWindow(QMainWindow):
         self.accounts_nav.setObjectName("NavButtonActive")
         self.notes_nav = QPushButton("小纸条")
         self.notes_nav.setObjectName("NavButton")
+        self.transfer_nav = QPushButton("传输助手")
+        self.transfer_nav.setObjectName("NavButton")
         self.trash_nav = QPushButton("回收站")
         self.trash_nav.setObjectName("NavButton")
         self.settings_nav = QPushButton("设置")
@@ -152,6 +154,7 @@ class MainWindow(QMainWindow):
         side_layout.addSpacing(26)
         side_layout.addWidget(self.accounts_nav)
         side_layout.addWidget(self.notes_nav)
+        side_layout.addWidget(self.transfer_nav)
         side_layout.addStretch()
         side_layout.addWidget(management_nav)
         side_layout.addSpacing(12)
@@ -162,6 +165,7 @@ class MainWindow(QMainWindow):
         self.account_detail_page = self._build_account_detail_page()
         self.notes_page = self._build_notes_page()
         self.note_detail_page = self._build_note_detail_page()
+        self.transfer_page = self._build_transfer_page()
         self.trash_page = self._build_trash_page()
         self.settings_page = self._build_settings_page()
         for page in (
@@ -169,6 +173,7 @@ class MainWindow(QMainWindow):
             self.account_detail_page,
             self.notes_page,
             self.note_detail_page,
+            self.transfer_page,
             self.trash_page,
             self.settings_page,
         ):
@@ -181,6 +186,7 @@ class MainWindow(QMainWindow):
 
         self.accounts_nav.clicked.connect(self._show_accounts_page)
         self.notes_nav.clicked.connect(self._show_notes_page)
+        self.transfer_nav.clicked.connect(self._show_transfer_page)
         self.trash_nav.clicked.connect(self._show_trash_page)
         self.settings_nav.clicked.connect(self._show_settings_page)
         lock.clicked.connect(self._lock)
@@ -332,6 +338,39 @@ class MainWindow(QMainWindow):
         self.note_search.textChanged.connect(self._refresh_notes)
         self.note_list.itemClicked.connect(self._open_note_item)
         self.note_list.customContextMenuRequested.connect(self._show_note_context_menu)
+        return page
+
+    def _build_transfer_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        header = QHBoxLayout()
+        title = QLabel("传输助手")
+        title.setObjectName("PageTitle")
+        connect_phone = QPushButton("连接手机")
+        connect_phone.setObjectName("PrimaryButton")
+        connect_phone.setToolTip("后续阶段将支持手机扫码连接")
+        self.transfer_status = QLabel("")
+        self.transfer_status.setObjectName("DataStatus")
+        self.transfer_status.setWordWrap(True)
+        self.transfer_status.setVisible(False)
+        self.transfer_search = QLineEdit()
+        self.transfer_search.setPlaceholderText("搜索传输记录、设备、状态")
+        self.transfer_device_notice = QLabel("当前可连接设备：后续阶段支持扫码配对和信任设备")
+        self.transfer_device_notice.setObjectName("DataStatus")
+        self.transfer_list = QListWidget()
+        self.transfer_list.setObjectName("RecordList")
+        self.transfer_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(connect_phone)
+        layout.addLayout(header)
+        layout.addWidget(self.transfer_status)
+        layout.addWidget(self.transfer_device_notice)
+        layout.addWidget(self.transfer_search)
+        layout.addWidget(self.transfer_list, 1)
+
+        self.transfer_search.textChanged.connect(self._refresh_transfer_conversations)
         return page
 
     def _build_note_detail_page(self) -> QWidget:
@@ -670,6 +709,7 @@ class MainWindow(QMainWindow):
         self.module_pages = {
             "accounts": self.accounts_page,
             "notes": self.notes_page,
+            "transfer": self.transfer_page,
             "trash": self.trash_page,
             "settings": self.settings_page,
         }
@@ -685,6 +725,7 @@ class MainWindow(QMainWindow):
         pairs = {
             "accounts": self.accounts_nav,
             "notes": self.notes_nav,
+            "transfer": self.transfer_nav,
             "trash": self.trash_nav,
             "settings": self.settings_nav,
         }
@@ -712,6 +753,10 @@ class MainWindow(QMainWindow):
         self._set_nav("notes")
         self.pages.setCurrentWidget(self.notes_page)
         self._refresh_notes()
+
+    def _show_transfer_page(self) -> None:
+        self._show_module_page("transfer", self.transfer_page)
+        self._refresh_transfer_conversations()
 
     def _show_trash_page(self) -> None:
         self._remember_module_page("trash", self.trash_page)
@@ -923,6 +968,39 @@ class MainWindow(QMainWindow):
                 item,
                 RecordListItem(summary, note_plain_summary(record.note)),
             )
+
+    def _refresh_transfer_conversations(self) -> None:
+        query = self.transfer_search.text().strip()
+        self.transfer_list.clear()
+        conversations = self.service.list_transfer_conversations(query)
+        self.transfer_status.setText("")
+        self.transfer_status.setVisible(False)
+        if not conversations:
+            self._add_empty_record_item(
+                self.transfer_list,
+                "当前没有传输记录" if not query else "没有找到匹配的传输记录",
+            )
+            return
+        for conversation in conversations:
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 74))
+            item.setData(Qt.ItemDataRole.UserRole, conversation.id)
+            self.transfer_list.addItem(item)
+            summary = RecordSummary(
+                id=conversation.id,
+                type=RecordType.SECURE_NOTE,
+                name=conversation.title,
+                account=conversation.device_name,
+                category=_transfer_status_label(conversation.status.value),
+                favorite=False,
+                created_at=conversation.created_at,
+                updated_at=conversation.updated_at,
+            )
+            subtitle = (
+                f"{conversation.device_name} · "
+                f"消息 {conversation.message_count} · 附件 {conversation.attachment_count}"
+            )
+            self.transfer_list.setItemWidget(item, RecordListItem(summary, subtitle))
 
     def _update_data_status(
         self,
@@ -1476,6 +1554,16 @@ def _category_color_key(category: str) -> str:
     palette = ["Blue", "Pink", "Cyan", "Mint", "Lavender", "Peach", "Sky"]
     index = sum(ord(ch) for ch in category) % len(palette)
     return palette[index]
+
+
+def _transfer_status_label(status: str) -> str:
+    labels = {
+        "active": "进行中",
+        "closed": "已关闭",
+        "pending_review": "待整理",
+        "transferred": "已转存",
+    }
+    return labels.get(status, status)
 
 
 def _with_note_source(note_html: str, source: str) -> str:

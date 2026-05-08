@@ -8,6 +8,7 @@ from uuid import uuid4
 from safebox.core.crypto import CryptoBox, InvalidPasswordError
 from safebox.core.models import Record, RecordSummary, RecordType
 from safebox.core.store import VaultStore
+from safebox.core.transfer import TransferConversation, TransferConversationStatus
 
 
 class VaultLockedError(RuntimeError):
@@ -201,17 +202,83 @@ class VaultService:
     def change_master_password(self, old_password: str, new_password: str) -> None:
         self.unlock(old_password)
         records = self._load_all()
+        conversations = self._load_transfer_conversations()
         box = CryptoBox.create(new_password)
         self.store.save_crypto_box(box)
         self._box = box
         for record in records:
             self._save(record)
+        for conversation in conversations:
+            self._save_transfer_conversation(conversation)
+
+    def create_transfer_conversation(
+        self,
+        *,
+        title: str,
+        device_name: str,
+    ) -> TransferConversation:
+        now = _now()
+        conversation = TransferConversation(
+            id=f"tc_{uuid4().hex}",
+            title=title.strip() or "未命名传输记录",
+            device_name=device_name.strip() or "未知设备",
+            created_at=now,
+            updated_at=now,
+        )
+        self._save_transfer_conversation(conversation)
+        return conversation
+
+    def list_transfer_conversations(self, query: str = "") -> list[TransferConversation]:
+        conversations = [
+            conversation
+            for conversation in self._load_transfer_conversations()
+            if not conversation.deleted_at
+        ]
+        term = query.casefold().strip()
+        if term:
+            conversations = [
+                conversation
+                for conversation in conversations
+                if term
+                in " ".join(
+                    [
+                        conversation.title,
+                        conversation.device_name,
+                        conversation.status.value,
+                    ]
+                ).casefold()
+            ]
+        return conversations
+
+    def get_transfer_conversation(self, conversation_id: str) -> TransferConversation:
+        for conversation in self._load_transfer_conversations():
+            if conversation.id == conversation_id:
+                return conversation
+        raise KeyError(conversation_id)
+
+    def close_transfer_conversation(self, conversation_id: str) -> TransferConversation:
+        existing = self.get_transfer_conversation(conversation_id)
+        if existing.status == TransferConversationStatus.CLOSED:
+            return existing
+        now = _now()
+        existing.status = TransferConversationStatus.CLOSED
+        existing.closed_at = now
+        existing.updated_at = now
+        existing.note_sync_active = False
+        self._save_transfer_conversation(existing)
+        return existing
 
     def _save(self, record: Record) -> None:
         self.store.upsert_record(self._require_box(), record)
 
     def _load_all(self) -> list[Record]:
         return self.store.load_records(self._require_box())
+
+    def _save_transfer_conversation(self, conversation: TransferConversation) -> None:
+        self.store.upsert_transfer_conversation(self._require_box(), conversation)
+
+    def _load_transfer_conversations(self) -> list[TransferConversation]:
+        return self.store.load_transfer_conversations(self._require_box())
 
     def _require_box(self) -> CryptoBox:
         if self._box is None:

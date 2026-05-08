@@ -177,6 +177,43 @@ def test_sidebar_navigation_preserves_note_detail_page(
     window.close()
 
 
+def test_transfer_assistant_page_lists_local_conversations(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_transfer_conversation(
+        title="祥磊的 iPhone 对话",
+        device_name="祥磊的 iPhone",
+    )
+    service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_page
+    assert window.transfer_list.count() == 2
+    assert window.transfer_status.text() == ""
+
+    window.transfer_search.setText("报销")
+
+    assert window.transfer_list.count() == 1
+
+    window.close()
+
+
 def test_explicit_back_resets_account_module_to_list(
     vault_path: Path,
     monkeypatch,
@@ -284,6 +321,7 @@ def test_sidebar_separates_management_nav_and_wraps_vault_summary(qt_app) -> Non
     window = MainWindow(lambda name: VaultService(Path(":memory:")))
 
     assert window.vault_subtitle.isHidden()
+    assert window.transfer_nav.text() == "传输助手"
     assert window.trash_nav.parent().objectName() == "ManagementNavGroup"
     assert window.settings_nav.parent().objectName() == "ManagementNavGroup"
 
