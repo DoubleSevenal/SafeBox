@@ -358,6 +358,8 @@ def test_connect_phone_starts_current_transfer_chat(
     assert window.transfer_server.url.startswith("http://")
     assert window.transfer_server.display_url in window.transfer_status.text()
     assert window.transfer_server.verification_code in window.transfer_status.text()
+    assert window.transfer_server.display_url in window.transfer_chat_connection.text()
+    assert window.transfer_server.verification_code in window.transfer_chat_connection.text()
 
     window.transfer_server.stop()
     window.close()

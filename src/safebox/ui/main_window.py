@@ -456,6 +456,10 @@ class MainWindow(QMainWindow):
         self.transfer_chat_title.setObjectName("HeroTitle")
         self.transfer_chat_meta = QLabel("")
         self.transfer_chat_meta.setObjectName("HeroMeta")
+        self.transfer_chat_connection = QLabel("")
+        self.transfer_chat_connection.setObjectName("DataStatus")
+        self.transfer_chat_connection.setWordWrap(True)
+        self.transfer_chat_connection.setVisible(False)
         self.transfer_messages_view = QTextEdit()
         self.transfer_messages_view.setObjectName("DetailNote")
         self.transfer_messages_view.setReadOnly(True)
@@ -473,6 +477,7 @@ class MainWindow(QMainWindow):
         hero_layout.setContentsMargins(20, 16, 20, 16)
         hero_layout.addWidget(self.transfer_chat_title)
         hero_layout.addWidget(self.transfer_chat_meta)
+        hero_layout.addWidget(self.transfer_chat_connection)
         input_row = QHBoxLayout()
         input_row.addWidget(self.transfer_message_input, 1)
         input_row.addWidget(self.transfer_edit_last_button)
@@ -1219,6 +1224,11 @@ class MainWindow(QMainWindow):
             f"验证码：{self.transfer_server.verification_code}"
         )
         self.transfer_status.setVisible(True)
+        self.transfer_chat_connection.setText(
+            f"手机访问：{self.transfer_server.display_url}\n"
+            f"验证码：{self.transfer_server.verification_code}"
+        )
+        self.transfer_chat_connection.setVisible(True)
         self._show_transfer_chat(self.transfer_server.conversation_id)
 
     def _show_transfer_chat(self, conversation_id: str) -> None:
@@ -1227,6 +1237,9 @@ class MainWindow(QMainWindow):
         writable = conversation.status != TransferConversationStatus.CLOSED
         self.transfer_chat_title.setText(conversation.title)
         self.transfer_chat_meta.setText(self._transfer_chat_meta(conversation.id))
+        if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
+            self.transfer_chat_connection.setText("")
+            self.transfer_chat_connection.setVisible(False)
         self.transfer_messages_view.setPlainText(self._format_transfer_messages(conversation_id))
         self.transfer_message_input.setEnabled(writable)
         self.transfer_send_button.setEnabled(writable)
