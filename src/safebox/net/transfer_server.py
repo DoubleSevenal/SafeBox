@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import socket
 from email.parser import BytesParser
 from email.policy import default
@@ -58,12 +59,32 @@ MOBILE_PAGE = """<!doctype html>
       color: white;
       font-weight: 700;
     }
+    .pair {
+      margin: 0 0 16px;
+      padding: 14px;
+      border: 1px solid #d4deeb;
+      border-radius: 14px;
+      background: #ffffff;
+    }
+    input[type="text"] {
+      box-sizing: border-box;
+      width: 160px;
+      min-height: 42px;
+      border: 1px solid #d4deeb;
+      border-radius: 12px;
+      padding: 0 12px;
+      font-size: 16px;
+    }
     #status { margin-top: 12px; color: #475569; }
   </style>
 </head>
 <body>
   <main>
     <h1>传输助手</h1>
+    <div class="pair">
+      <input id="code" type="text" inputmode="numeric" placeholder="验证码">
+      <button onclick="pairDevice()">验证</button>
+    </div>
     <textarea id="text" placeholder="输入要发送到电脑的文字"></textarea>
     <button onclick="sendText()">发送</button>
     <div class="tools">
@@ -76,6 +97,15 @@ MOBILE_PAGE = """<!doctype html>
     <div id="status"></div>
   </main>
   <script>
+    async function pairDevice() {
+      const code = document.getElementById('code').value;
+      const response = await fetch('/api/pair', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({code})
+      });
+      document.getElementById('status').textContent = response.ok ? '验证成功' : '验证码错误';
+    }
     async function sendText() {
       const text = document.getElementById('text').value;
       const response = await fetch('/api/messages', {
@@ -113,12 +143,15 @@ class TransferHttpServer:
         port: int = 0,
         device_name: str = "手机浏览器",
         lan_ip_provider=lan_ip_address,
+        verification_code: str = "",
     ) -> None:
         self.service = service
         self.host = host
         self.port = port
         self.device_name = device_name
         self.lan_ip_provider = lan_ip_provider
+        self.verification_code = verification_code or f"{secrets.randbelow(1_000_000):06d}"
+        self.paired = False
         self.conversation_id = ""
         self.upload_dir = service.store.path.parent / "attachments"
         self._server: ThreadingHTTPServer | None = None
@@ -180,12 +213,16 @@ class TransferHttpServer:
                         {
                             "conversation_id": owner.conversation_id,
                             "device_name": owner.device_name,
+                            "paired": owner.paired,
                         },
                     )
                     return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self) -> None:
+                if self.path == "/api/pair":
+                    self._handle_pair_post()
+                    return
                 if self.path == "/api/messages":
                     self._handle_message_post()
                     return
@@ -194,7 +231,19 @@ class TransferHttpServer:
                     return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
+            def _handle_pair_post(self) -> None:
+                payload = self._read_json()
+                code = str(payload.get("code", "")).strip()
+                if code != owner.verification_code:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid_code"})
+                    return
+                owner.paired = True
+                self._send_json(HTTPStatus.OK, {"ok": True, "paired": True})
+
             def _handle_message_post(self) -> None:
+                if not owner.paired:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "pair_required"})
+                    return
                 payload = self._read_json()
                 text = str(payload.get("text", "")).strip()
                 if not text:
@@ -208,6 +257,9 @@ class TransferHttpServer:
                 self._send_json(HTTPStatus.OK, {"ok": True, "message_id": message.id})
 
             def _handle_upload_post(self) -> None:
+                if not owner.paired:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "pair_required"})
+                    return
                 content_type = self.headers.get("Content-Type", "")
                 if "multipart/form-data" not in content_type:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": "multipart_required"})

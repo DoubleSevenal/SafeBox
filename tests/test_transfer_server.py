@@ -20,6 +20,47 @@ def _request_json(url: str, payload: dict[str, str]) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _request_error_code(url: str, payload: dict[str, str]) -> int:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        urlopen(request, timeout=5)
+    except HTTPError as exc:
+        return exc.code
+    return 200
+
+
+def _upload_file(url: str, filename: str, content: bytes, mime_type: str) -> dict:
+    body, boundary = _multipart_file(filename, content, mime_type)
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _upload_error_code(url: str, filename: str, content: bytes, mime_type: str) -> int:
+    body, boundary = _multipart_file(filename, content, mime_type)
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        urlopen(request, timeout=5)
+    except HTTPError as exc:
+        return exc.code
+    return 200
+
+
 def _multipart_file(filename: str, content: bytes, mime_type: str) -> tuple[bytes, str]:
     boundary = "----safebox-test-boundary"
     body = b"\r\n".join(
@@ -42,7 +83,7 @@ def _multipart_file(filename: str, content: bytes, mime_type: str) -> tuple[byte
 def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service)
+    server = TransferHttpServer(service, verification_code="123456")
 
     server.start()
     try:
@@ -57,8 +98,11 @@ def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     assert "发送" in html
     assert "选择文件" in html
     assert "上传附件" in html
+    assert "验证码" in html
+    assert "验证" in html
     assert session["conversation_id"] == server.conversation_id
     assert session["device_name"] == "手机浏览器"
+    assert session["paired"] is False
 
 
 def test_transfer_server_exposes_display_url_with_lan_ip(vault_path) -> None:
@@ -107,10 +151,11 @@ def test_lan_ip_address_returns_empty_when_probe_fails(monkeypatch) -> None:
 def test_transfer_server_accepts_phone_text_message(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service)
+    server = TransferHttpServer(service, verification_code="123456")
 
     server.start()
     try:
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
         result = _request_json(f"{server.url}/api/messages", {"text": "手机发来的文字"})
     finally:
         server.stop()
@@ -122,25 +167,52 @@ def test_transfer_server_accepts_phone_text_message(vault_path) -> None:
     assert messages[0].text == "手机发来的文字"
 
 
-def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
+def test_transfer_server_rejects_message_before_pairing(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service)
+    server = TransferHttpServer(service, verification_code="123456")
 
     server.start()
     try:
-        request = Request(
-            f"{server.url}/api/messages",
-            data=json.dumps({"text": "   "}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            urlopen(request, timeout=5)
-        except HTTPError as exc:
-            status = exc.code
-        else:
-            status = 200
+        status = _request_error_code(f"{server.url}/api/messages", {"text": "手机发来的文字"})
+    finally:
+        server.stop()
+
+    assert status == 403
+    assert service.list_transfer_messages(server.conversation_id) == []
+
+
+def test_transfer_server_pairs_with_verification_code(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        wrong_status = _request_error_code(f"{server.url}/api/pair", {"code": "000000"})
+        with urlopen(f"{server.url}/api/session", timeout=5) as response:
+            unpaired_session = json.loads(response.read().decode("utf-8"))
+        result = _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        with urlopen(f"{server.url}/api/session", timeout=5) as response:
+            paired_session = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.stop()
+
+    assert wrong_status == 403
+    assert unpaired_session["paired"] is False
+    assert result == {"ok": True, "paired": True}
+    assert paired_session["paired"] is True
+
+
+def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        status = _request_error_code(f"{server.url}/api/messages", {"text": "   "})
     finally:
         server.stop()
 
@@ -150,19 +222,17 @@ def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
 def test_transfer_server_accepts_file_upload(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service)
-    body, boundary = _multipart_file("invoice.pdf", b"pdf data", "application/pdf")
+    server = TransferHttpServer(service, verification_code="123456")
 
     server.start()
     try:
-        request = Request(
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        result = _upload_file(
             f"{server.url}/api/uploads",
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            method="POST",
+            "invoice.pdf",
+            b"pdf data",
+            "application/pdf",
         )
-        with urlopen(request, timeout=5) as response:
-            result = json.loads(response.read().decode("utf-8"))
     finally:
         server.stop()
 
@@ -180,22 +250,41 @@ def test_transfer_server_accepts_file_upload(vault_path) -> None:
     assert b"pdf data" in open(attachments[0].storage_path, "rb").read()
 
 
-def test_transfer_server_treats_uploaded_image_as_image_message(vault_path) -> None:
+def test_transfer_server_rejects_upload_before_pairing(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
-    server = TransferHttpServer(service)
-    body, boundary = _multipart_file("invoice.png", b"png data", "image/png")
+    server = TransferHttpServer(service, verification_code="123456")
 
     server.start()
     try:
-        request = Request(
+        status = _upload_error_code(
             f"{server.url}/api/uploads",
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            method="POST",
+            "invoice.pdf",
+            b"pdf data",
+            "application/pdf",
         )
-        with urlopen(request, timeout=5):
-            pass
+    finally:
+        server.stop()
+
+    assert status == 403
+    assert service.list_transfer_messages(server.conversation_id) == []
+    assert service.list_transfer_attachments(server.conversation_id) == []
+
+
+def test_transfer_server_treats_uploaded_image_as_image_message(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _upload_file(
+            f"{server.url}/api/uploads",
+            "invoice.png",
+            b"png data",
+            "image/png",
+        )
     finally:
         server.stop()
 

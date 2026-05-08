@@ -1205,7 +1205,10 @@ class MainWindow(QMainWindow):
             self.transfer_server.stop()
         self.transfer_server = TransferHttpServer(self.service)
         self.transfer_server.start()
-        self.transfer_status.setText(f"手机访问地址：{self.transfer_server.display_url}")
+        self.transfer_status.setText(
+            f"手机访问地址：{self.transfer_server.display_url}\n"
+            f"验证码：{self.transfer_server.verification_code}"
+        )
         self.transfer_status.setVisible(True)
         self._show_transfer_chat(self.transfer_server.conversation_id)
 

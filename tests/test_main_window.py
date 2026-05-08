@@ -357,6 +357,7 @@ def test_connect_phone_starts_current_transfer_chat(
     assert window.transfer_server is not None
     assert window.transfer_server.url.startswith("http://")
     assert window.transfer_server.display_url in window.transfer_status.text()
+    assert window.transfer_server.verification_code in window.transfer_status.text()
 
     window.transfer_server.stop()
     window.close()
@@ -419,6 +420,15 @@ def test_transfer_server_phone_message_appears_in_current_chat(
     window._open_vault()
     window._show_transfer_page()
     window.connect_phone_button.click()
+
+    pair_request = Request(
+        f"{window.transfer_server.url}/api/pair",
+        data=json.dumps({"code": window.transfer_server.verification_code}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(pair_request, timeout=5):
+        pass
 
     request = Request(
         f"{window.transfer_server.url}/api/messages",
