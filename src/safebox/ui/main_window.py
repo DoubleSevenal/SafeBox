@@ -40,6 +40,7 @@ from safebox.core.record_sorting import (
 )
 from safebox.core.services import try_unlock
 from safebox.core.settings import AppSettings
+from safebox.core.transfer import TransferConversationStatus, TransferMessageSender
 from safebox.core.vault_profiles import (
     VaultProfileSettings,
     app_data_dir,
@@ -168,6 +169,7 @@ class MainWindow(QMainWindow):
         self.note_detail_page = self._build_note_detail_page()
         self.transfer_page = self._build_transfer_page()
         self.transfer_detail_page = self._build_transfer_detail_page()
+        self.transfer_chat_page = self._build_transfer_chat_page()
         self.trash_page = self._build_trash_page()
         self.settings_page = self._build_settings_page()
         for page in (
@@ -177,6 +179,7 @@ class MainWindow(QMainWindow):
             self.note_detail_page,
             self.transfer_page,
             self.transfer_detail_page,
+            self.transfer_chat_page,
             self.trash_page,
             self.settings_page,
         ):
@@ -409,6 +412,50 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.transfer_detail_body, 1)
 
         back.clicked.connect(self._show_transfer_list_page)
+        return page
+
+    def _build_transfer_chat_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 24, 28, 24)
+        top = QHBoxLayout()
+        back = QPushButton("返回列表")
+        back.setObjectName("SubtleButton")
+        self.transfer_close_button = QPushButton("关闭此次对话")
+        self.transfer_close_button.setObjectName("SubtleButton")
+        self.transfer_chat_title = QLabel("手机对话")
+        self.transfer_chat_title.setObjectName("HeroTitle")
+        self.transfer_chat_meta = QLabel("")
+        self.transfer_chat_meta.setObjectName("HeroMeta")
+        self.transfer_messages_view = QTextEdit()
+        self.transfer_messages_view.setObjectName("DetailNote")
+        self.transfer_messages_view.setReadOnly(True)
+        self.transfer_message_input = QTextEdit()
+        self.transfer_message_input.setObjectName("TransferMessageInput")
+        self.transfer_message_input.setPlaceholderText("输入要发送给手机的文字")
+        self.transfer_message_input.setFixedHeight(92)
+        self.transfer_send_button = QPushButton("发送")
+        self.transfer_send_button.setObjectName("PrimaryButton")
+        hero = QFrame()
+        hero.setObjectName("DetailHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(20, 16, 20, 16)
+        hero_layout.addWidget(self.transfer_chat_title)
+        hero_layout.addWidget(self.transfer_chat_meta)
+        input_row = QHBoxLayout()
+        input_row.addWidget(self.transfer_message_input, 1)
+        input_row.addWidget(self.transfer_send_button)
+        top.addWidget(back)
+        top.addStretch()
+        top.addWidget(self.transfer_close_button)
+        layout.addLayout(top)
+        layout.addWidget(hero)
+        layout.addWidget(self.transfer_messages_view, 1)
+        layout.addLayout(input_row)
+
+        back.clicked.connect(self._show_transfer_list_page)
+        self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
+        self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
         return page
 
     def _build_note_detail_page(self) -> QWidget:
@@ -1049,23 +1096,58 @@ class MainWindow(QMainWindow):
     def _open_transfer_item(self, item: QListWidgetItem) -> None:
         self.current_transfer_id = item.data(Qt.ItemDataRole.UserRole)
         conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        if conversation.status == TransferConversationStatus.ACTIVE:
+            self._show_transfer_chat(conversation.id)
+            return
         self.transfer_detail_title.setText(conversation.title)
         self.transfer_detail_meta.setText(
             f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)}"
         )
-        self.transfer_detail_body.setPlainText(
-            "聊天内容将在后续阶段接入。\n\n"
-            f"消息数量：{conversation.message_count}\n"
-            f"附件数量：{conversation.attachment_count}"
-        )
+        self.transfer_detail_body.setPlainText(self._format_transfer_messages(conversation.id))
         self._remember_module_page("transfer", self.transfer_detail_page)
         self.pages.setCurrentWidget(self.transfer_detail_page)
 
     def _show_connect_phone_placeholder(self) -> None:
-        self.transfer_status.setText(
-            "手机连接将在后续阶段支持：电脑显示二维码，手机扫码配对后开始同步。"
+        conversation = self.service.create_transfer_conversation(
+            title="手机对话",
+            device_name="手机浏览器",
         )
-        self.transfer_status.setVisible(True)
+        self._show_transfer_chat(conversation.id)
+
+    def _show_transfer_chat(self, conversation_id: str) -> None:
+        self.current_transfer_id = conversation_id
+        conversation = self.service.get_transfer_conversation(conversation_id)
+        self.transfer_chat_title.setText(conversation.title)
+        self.transfer_chat_meta.setText(
+            f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)}"
+        )
+        self.transfer_messages_view.setPlainText(self._format_transfer_messages(conversation_id))
+        self._remember_module_page("transfer", self.transfer_chat_page)
+        self._set_nav("transfer")
+        self.pages.setCurrentWidget(self.transfer_chat_page)
+
+    def _send_current_transfer_text(self) -> None:
+        text = self.transfer_message_input.toPlainText()
+        self.service.add_transfer_text_message(
+            self.current_transfer_id,
+            sender=TransferMessageSender.DESKTOP,
+            text=text,
+        )
+        self.transfer_message_input.clear()
+        self._show_transfer_chat(self.current_transfer_id)
+
+    def _close_current_transfer_chat(self) -> None:
+        if not self.current_transfer_id:
+            return
+        self.service.close_transfer_conversation(self.current_transfer_id)
+        self._show_transfer_list_page()
+
+    def _format_transfer_messages(self, conversation_id: str) -> str:
+        lines: list[str] = []
+        for message in self.service.list_transfer_messages(conversation_id):
+            sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            lines.append(f"{sender} {message.created_at}\n{message.text}")
+        return "\n\n".join(lines)
 
     def _update_data_status(
         self,

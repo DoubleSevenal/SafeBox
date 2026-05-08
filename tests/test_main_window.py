@@ -252,19 +252,6 @@ def test_transfer_conversation_opens_read_only_detail(
     window.close()
 
 
-def test_connect_phone_button_shows_placeholder_notice(qt_app) -> None:
-    window = MainWindow(lambda name: VaultService(Path(":memory:")))
-
-    assert window.transfer_status.isHidden()
-
-    window.connect_phone_button.click()
-
-    assert not window.transfer_status.isHidden()
-    assert "扫码配对" in window.transfer_status.text()
-
-    window.close()
-
-
 def test_transfer_detail_back_resets_transfer_module_to_list(
     vault_path: Path,
     monkeypatch,
@@ -292,6 +279,104 @@ def test_transfer_detail_back_resets_transfer_module_to_list(
     window._show_transfer_page()
 
     assert window.pages.currentWidget() == window.transfer_page
+
+    window.close()
+
+
+def test_connect_phone_starts_current_transfer_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+
+    window.connect_phone_button.click()
+
+    assert window.pages.currentWidget() == window.transfer_chat_page
+    assert window.current_transfer_id
+    assert window.transfer_chat_title.text() == "手机对话"
+    assert window.transfer_messages_view.toPlainText() == ""
+
+    window.close()
+
+
+def test_transfer_chat_sends_text_and_closes_to_history(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+
+    window.transfer_message_input.setPlainText("电脑发来的资料说明")
+    window.transfer_send_button.click()
+
+    assert "电脑" in window.transfer_messages_view.toPlainText()
+    assert "电脑发来的资料说明" in window.transfer_messages_view.toPlainText()
+    assert window.transfer_message_input.toPlainText() == ""
+
+    window.transfer_close_button.click()
+
+    conversation = window.service.get_transfer_conversation(window.current_transfer_id)
+    assert conversation.message_count == 1
+    assert conversation.status.value == "closed"
+    assert window.pages.currentWidget() == window.transfer_page
+    assert window.transfer_list.count() == 1
+
+    window._open_transfer_item(window.transfer_list.item(0))
+    assert "电脑发来的资料说明" in window.transfer_detail_body.toPlainText()
+    assert "只读查看" in window.transfer_detail_notice.text()
+
+    window.close()
+
+
+def test_sidebar_navigation_preserves_active_transfer_chat(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+
+    window.transfer_message_input.setPlainText("保留这次对话")
+    window.transfer_send_button.click()
+
+    window._show_notes_page()
+    window._show_transfer_page()
+
+    assert window.pages.currentWidget() == window.transfer_chat_page
+    assert "保留这次对话" in window.transfer_messages_view.toPlainText()
 
     window.close()
 

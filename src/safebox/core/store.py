@@ -5,7 +5,7 @@ from pathlib import Path
 
 from safebox.core.crypto import CryptoBox
 from safebox.core.models import Record
-from safebox.core.transfer import TransferConversation
+from safebox.core.transfer import TransferConversation, TransferMessage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS vault_meta (
@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS transfer_conversations (
     device_index TEXT NOT NULL,
     status TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    encrypted_payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transfer_messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    created_at TEXT NOT NULL,
     encrypted_payload TEXT NOT NULL
 );
 """
@@ -151,6 +160,65 @@ class VaultStore:
                 "SELECT encrypted_payload FROM transfer_conversations ORDER BY updated_at DESC"
             ).fetchall()
         return [TransferConversation.from_dict(box.decrypt_json(row[0])) for row in rows]
+
+    def upsert_transfer_message(self, box: CryptoBox, message: TransferMessage) -> None:
+        encrypted = box.encrypt_json(message.to_dict())
+        with self._connect() as con:
+            con.executescript(SCHEMA)
+            con.execute(
+                """
+                INSERT INTO transfer_messages(
+                    id, conversation_id, kind, sender, created_at, encrypted_payload
+                )
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    kind = excluded.kind,
+                    sender = excluded.sender,
+                    created_at = excluded.created_at,
+                    encrypted_payload = excluded.encrypted_payload
+                """,
+                (
+                    message.id,
+                    message.conversation_id,
+                    message.kind.value,
+                    message.sender.value,
+                    message.created_at,
+                    encrypted,
+                ),
+            )
+
+    def load_transfer_messages(
+        self,
+        box: CryptoBox,
+        conversation_id: str,
+    ) -> list[TransferMessage]:
+        rows = self._load_transfer_message_rows(conversation_id)
+        return [TransferMessage.from_dict(box.decrypt_json(row[0])) for row in rows]
+
+    def load_all_transfer_messages(self, box: CryptoBox) -> list[TransferMessage]:
+        rows = self._load_transfer_message_rows()
+        return [TransferMessage.from_dict(box.decrypt_json(row[0])) for row in rows]
+
+    def _load_transfer_message_rows(
+        self,
+        conversation_id: str = "",
+    ) -> list[sqlite3.Row]:
+        with self._connect() as con:
+            con.executescript(SCHEMA)
+            if conversation_id:
+                return con.execute(
+                    """
+                    SELECT encrypted_payload
+                    FROM transfer_messages
+                    WHERE conversation_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (conversation_id,),
+                ).fetchall()
+            return con.execute(
+                "SELECT encrypted_payload FROM transfer_messages ORDER BY created_at ASC"
+            ).fetchall()
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)

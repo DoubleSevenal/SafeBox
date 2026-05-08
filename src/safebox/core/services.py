@@ -8,7 +8,13 @@ from uuid import uuid4
 from safebox.core.crypto import CryptoBox, InvalidPasswordError
 from safebox.core.models import Record, RecordSummary, RecordType
 from safebox.core.store import VaultStore
-from safebox.core.transfer import TransferConversation, TransferConversationStatus
+from safebox.core.transfer import (
+    TransferConversation,
+    TransferConversationStatus,
+    TransferMessage,
+    TransferMessageKind,
+    TransferMessageSender,
+)
 
 
 class VaultLockedError(RuntimeError):
@@ -203,6 +209,7 @@ class VaultService:
         self.unlock(old_password)
         records = self._load_all()
         conversations = self._load_transfer_conversations()
+        messages = self.store.load_all_transfer_messages(self._require_box())
         box = CryptoBox.create(new_password)
         self.store.save_crypto_box(box)
         self._box = box
@@ -210,6 +217,8 @@ class VaultService:
             self._save(record)
         for conversation in conversations:
             self._save_transfer_conversation(conversation)
+        for message in messages:
+            self._save_transfer_message(message)
 
     def create_transfer_conversation(
         self,
@@ -268,6 +277,46 @@ class VaultService:
         self._save_transfer_conversation(existing)
         return existing
 
+    def add_transfer_text_message(
+        self,
+        conversation_id: str,
+        *,
+        sender: TransferMessageSender,
+        text: str,
+    ) -> TransferMessage:
+        clean_text = text.strip()
+        if not clean_text:
+            raise ValueError("Message text is required")
+        conversation = self.get_transfer_conversation(conversation_id)
+        if conversation.status == TransferConversationStatus.CLOSED:
+            raise ValueError("Transfer conversation is closed")
+        now = _now()
+        message = TransferMessage(
+            id=f"tm_{uuid4().hex}",
+            conversation_id=conversation.id,
+            sender=sender,
+            kind=TransferMessageKind.TEXT,
+            text=clean_text,
+            created_at=now,
+            updated_at=now,
+        )
+        self._save_transfer_message(message)
+        conversation.message_count += 1
+        conversation.updated_at = now
+        self._save_transfer_conversation(conversation)
+        return message
+
+    def list_transfer_messages(self, conversation_id: str) -> list[TransferMessage]:
+        self.get_transfer_conversation(conversation_id)
+        return [
+            message
+            for message in self.store.load_transfer_messages(
+                self._require_box(),
+                conversation_id,
+            )
+            if not message.deleted_at
+        ]
+
     def _save(self, record: Record) -> None:
         self.store.upsert_record(self._require_box(), record)
 
@@ -279,6 +328,9 @@ class VaultService:
 
     def _load_transfer_conversations(self) -> list[TransferConversation]:
         return self.store.load_transfer_conversations(self._require_box())
+
+    def _save_transfer_message(self, message: TransferMessage) -> None:
+        self.store.upsert_transfer_message(self._require_box(), message)
 
     def _require_box(self) -> CryptoBox:
         if self._box is None:

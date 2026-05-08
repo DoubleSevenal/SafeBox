@@ -485,6 +485,17 @@ QTextEdit#DetailNote {
     line-height: 1.55;
     padding: 12px;
 }
+QTextEdit#TransferMessageInput {
+    background: #ffffff;
+    border: 1px solid #dbe5f3;
+    border-radius: 14px;
+    font-size: 15px;
+    line-height: 1.45;
+    padding: 10px;
+}
+QTextEdit#TransferMessageInput:focus {
+    border: 1px solid #3b82f6;
+}
 QTextEdit#NoteBody {
     font-size: 16px;
     line-height: 1.55;

@@ -12,6 +12,18 @@ class TransferConversationStatus(StrEnum):
     TRANSFERRED = "transferred"
 
 
+class TransferMessageSender(StrEnum):
+    DESKTOP = "desktop"
+    PHONE = "phone"
+
+
+class TransferMessageKind(StrEnum):
+    TEXT = "text"
+    IMAGE = "image"
+    FILE = "file"
+    SYSTEM = "system"
+
+
 @dataclass(slots=True)
 class TransferConversation:
     id: str
@@ -42,5 +54,37 @@ class TransferConversation:
         clean.setdefault("note_id", "")
         clean.setdefault("note_sync_active", False)
         clean.setdefault("note_last_appended_message_id", "")
+        clean.setdefault("deleted_at", "")
+        return cls(**clean)
+
+
+@dataclass(slots=True)
+class TransferMessage:
+    id: str
+    conversation_id: str
+    sender: TransferMessageSender
+    kind: TransferMessageKind
+    text: str = ""
+    attachment_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    edited_at: str = ""
+    deleted_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["sender"] = self.sender.value
+        data["kind"] = self.kind.value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TransferMessage:
+        clean = dict(data)
+        clean["sender"] = TransferMessageSender(clean["sender"])
+        clean["kind"] = TransferMessageKind(clean["kind"])
+        clean.setdefault("text", "")
+        clean.setdefault("attachment_id", "")
+        clean.setdefault("updated_at", "")
+        clean.setdefault("edited_at", "")
         clean.setdefault("deleted_at", "")
         return cls(**clean)
