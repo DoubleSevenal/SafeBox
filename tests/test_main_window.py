@@ -5,6 +5,7 @@ from safebox.core.vault_profiles import load_profile_settings, vault_path_for_na
 from safebox.ui import main_window
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
 from safebox.ui.main_window import NOTE_BODY_FONT_SIZE_PT, MainWindow
+from safebox.ui.theme import LIGHT_FLUENT_QSS
 
 
 class FakeVaultOpenDialog:
@@ -94,6 +95,158 @@ def test_record_context_menu_actions_view_and_delete(vault_path: Path, monkeypat
 
     assert window.account_list.contextMenuPolicy().name == "CustomContextMenu"
     assert window.note_list.contextMenuPolicy().name == "CustomContextMenu"
+    window.close()
+
+
+def test_sidebar_navigation_preserves_account_detail_page(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    account = service.create_account(
+        name="教务系统",
+        account="student-user",
+        password="secret",
+        category="学校",
+    )
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    account_item = window.account_list.item(0)
+    window._open_account_item(account_item)
+    assert window.current_account_id == account.id
+    assert window.pages.currentWidget() == window.account_detail_page
+
+    window._show_notes_page()
+    assert window.pages.currentWidget() == window.notes_page
+
+    window._show_accounts_page()
+    assert window.pages.currentWidget() == window.account_detail_page
+    assert window.current_account_id == account.id
+    assert window.account_title.text() == "教务系统"
+
+    window.close()
+
+
+def test_sidebar_navigation_preserves_note_detail_page(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_account(
+        name="微信",
+        account="wechat-user",
+        password="secret",
+        category="软件",
+    )
+    note = service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window._show_notes_page()
+    note_item = window.note_list.item(0)
+    window._open_note_item(note_item)
+    assert window.current_note_id == note.id
+    assert window.pages.currentWidget() == window.note_detail_page
+
+    window._show_accounts_page()
+    assert window.pages.currentWidget() == window.accounts_page
+
+    window._show_notes_page()
+    assert window.pages.currentWidget() == window.note_detail_page
+    assert window.current_note_id == note.id
+    assert window.note_title_input.text() == "课程安排"
+
+    window.close()
+
+
+def test_explicit_back_resets_account_module_to_list(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_account(
+        name="教务系统",
+        account="student-user",
+        password="secret",
+        category="学校",
+    )
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window._open_account_item(window.account_list.item(0))
+    window._show_accounts_list_page()
+    assert window.pages.currentWidget() == window.accounts_page
+
+    window._show_notes_page()
+    window._show_accounts_page()
+    assert window.pages.currentWidget() == window.accounts_page
+
+    window.close()
+
+
+def test_deleting_current_account_resets_accounts_module_to_list(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_account(
+        name="教务系统",
+        account="student-user",
+        password="secret",
+        category="学校",
+    )
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    monkeypatch.setattr(
+        main_window.QMessageBox,
+        "question",
+        lambda *args, **kwargs: main_window.QMessageBox.StandardButton.Yes,
+    )
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window._open_account_item(window.account_list.item(0))
+    window._delete_current_account()
+    assert window.pages.currentWidget() == window.accounts_page
+
+    window._show_notes_page()
+    window._show_accounts_page()
+    assert window.pages.currentWidget() == window.accounts_page
+
     window.close()
 
 
@@ -213,6 +366,20 @@ def test_note_toolbar_keeps_format_brush_and_font_size_compact(qt_app) -> None:
     assert window.note_font_size.minimumWidth() <= 70
 
     window.close()
+
+
+def test_named_buttons_have_hover_and_pressed_feedback() -> None:
+    required_selectors = [
+        "QPushButton#SubtleButton:hover",
+        "QPushButton#SubtleButton:pressed",
+        "QPushButton#PrimaryButton:pressed",
+        "QPushButton#DangerButton:pressed",
+        "QPushButton#FormatButton:pressed",
+        "QPushButton#FormatButtonWide:pressed",
+    ]
+
+    for selector in required_selectors:
+        assert selector in LIGHT_FLUENT_QSS
 
 
 def test_note_font_size_control_applies_selected_size(qt_app) -> None:

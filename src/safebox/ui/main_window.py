@@ -173,6 +173,7 @@ class MainWindow(QMainWindow):
             self.settings_page,
         ):
             self.pages.addWidget(page)
+        self._reset_module_pages()
 
         shell.addWidget(sidebar)
         shell.addWidget(self.pages, 1)
@@ -279,7 +280,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.account_note, 1)
         layout.addLayout(copy_row)
 
-        back.clicked.connect(self._show_accounts_page)
+        back.clicked.connect(self._show_accounts_list_page)
         self.account_edit_button.clicked.connect(self._toggle_account_edit)
         delete.clicked.connect(self._delete_current_account)
         copy_account.clicked.connect(lambda: self._copy_current_account_field("account"))
@@ -445,7 +446,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(toolbar)
         layout.addWidget(self.note_body, 1)
 
-        back.clicked.connect(self._show_notes_page)
+        back.clicked.connect(self._show_notes_list_page)
         self.note_edit_button.clicked.connect(self._enter_note_edit_mode)
         self.note_save_button.clicked.connect(self._save_current_note)
         delete.clicked.connect(self._delete_current_note)
@@ -659,11 +660,26 @@ class MainWindow(QMainWindow):
         self._apply_auto_lock_settings()
         self.vault_subtitle.setText(f"保险箱ID：{self.vault_name}")
         self._refresh_settings_view()
-        self._show_accounts_page()
-        self._refresh_accounts()
+        self._reset_module_pages()
+        self._show_accounts_list_page()
 
     def _show_unlock_dialog(self) -> None:
         self._open_vault()
+
+    def _reset_module_pages(self) -> None:
+        self.module_pages = {
+            "accounts": self.accounts_page,
+            "notes": self.notes_page,
+            "trash": self.trash_page,
+            "settings": self.settings_page,
+        }
+
+    def _remember_module_page(self, module: str, page: QWidget) -> None:
+        self.module_pages[module] = page
+
+    def _show_module_page(self, module: str, default_page: QWidget) -> None:
+        self._set_nav(module)
+        self.pages.setCurrentWidget(self.module_pages.get(module, default_page))
 
     def _set_nav(self, active: str) -> None:
         pairs = {
@@ -678,21 +694,33 @@ class MainWindow(QMainWindow):
             button.style().polish(button)
 
     def _show_accounts_page(self) -> None:
+        self._show_module_page("accounts", self.accounts_page)
+        self._refresh_accounts()
+
+    def _show_accounts_list_page(self) -> None:
+        self._remember_module_page("accounts", self.accounts_page)
         self._set_nav("accounts")
         self.pages.setCurrentWidget(self.accounts_page)
         self._refresh_accounts()
 
     def _show_notes_page(self) -> None:
+        self._show_module_page("notes", self.notes_page)
+        self._refresh_notes()
+
+    def _show_notes_list_page(self) -> None:
+        self._remember_module_page("notes", self.notes_page)
         self._set_nav("notes")
         self.pages.setCurrentWidget(self.notes_page)
         self._refresh_notes()
 
     def _show_trash_page(self) -> None:
+        self._remember_module_page("trash", self.trash_page)
         self._set_nav("trash")
         self.pages.setCurrentWidget(self.trash_page)
         self._refresh_trash()
 
     def _show_settings_page(self) -> None:
+        self._remember_module_page("settings", self.settings_page)
         self._set_nav("settings")
         self._refresh_settings_view()
         self.pages.setCurrentWidget(self.settings_page)
@@ -934,6 +962,7 @@ class MainWindow(QMainWindow):
     def _open_account_item(self, item: QListWidgetItem) -> None:
         self.current_account_id = item.data(Qt.ItemDataRole.UserRole)
         self._render_account_detail(self.service.get_record(self.current_account_id))
+        self._remember_module_page("accounts", self.account_detail_page)
         self.pages.setCurrentWidget(self.account_detail_page)
 
     def _render_account_detail(self, record: Record) -> None:
@@ -954,6 +983,7 @@ class MainWindow(QMainWindow):
     def _open_note_item(self, item: QListWidgetItem) -> None:
         self.current_note_id = item.data(Qt.ItemDataRole.UserRole)
         self._render_note_detail(self.service.get_record(self.current_note_id))
+        self._remember_module_page("notes", self.note_detail_page)
         self.pages.setCurrentWidget(self.note_detail_page)
 
     def _show_account_context_menu(self, position) -> None:
@@ -1010,10 +1040,12 @@ class MainWindow(QMainWindow):
         if page == "accounts":
             if self.current_account_id == record_id:
                 self.current_account_id = ""
+                self._remember_module_page("accounts", self.accounts_page)
             self._refresh_accounts()
         else:
             if self.current_note_id == record_id:
                 self.current_note_id = ""
+                self._remember_module_page("notes", self.notes_page)
             self._refresh_notes()
 
     def _render_note_detail(self, record: Record) -> None:
@@ -1095,6 +1127,7 @@ class MainWindow(QMainWindow):
         self.current_note_id = note.id
         self._render_note_detail(note)
         self._enter_note_edit_mode()
+        self._remember_module_page("notes", self.note_detail_page)
         self.pages.setCurrentWidget(self.note_detail_page)
 
     def _import_note_file(self) -> None:
@@ -1123,6 +1156,7 @@ class MainWindow(QMainWindow):
         self.current_note_id = note.id
         self._render_note_detail(note)
         self._refresh_notes()
+        self._remember_module_page("notes", self.note_detail_page)
         self.pages.setCurrentWidget(self.note_detail_page)
         self._show_note_save_notice("导入成功")
 
@@ -1331,7 +1365,7 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self.service.delete_record(self.current_account_id)
             self.current_account_id = ""
-            self._show_accounts_page()
+            self._show_accounts_list_page()
 
     def _delete_current_note(self) -> None:
         if not self.current_note_id:
@@ -1340,7 +1374,7 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self.service.delete_record(self.current_note_id)
             self.current_note_id = ""
-            self._show_notes_page()
+            self._show_notes_list_page()
 
     def _restore_selected_trash(self) -> None:
         item = self.trash_list.currentItem()
@@ -1375,6 +1409,7 @@ class MainWindow(QMainWindow):
         self._clear_account_fields()
         self.current_account_id = ""
         self.current_note_id = ""
+        self._reset_module_pages()
         self._open_vault()
 
     def closeEvent(self, event) -> None:

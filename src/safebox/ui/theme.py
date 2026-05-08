@@ -246,6 +246,15 @@ QPushButton#PrimaryButton {
 }
 QPushButton#PrimaryButton:hover {
     background: #1d4ed8;
+    border-color: #1d4ed8;
+}
+QPushButton#PrimaryButton:pressed {
+    background: #1e40af;
+    border-color: #1e40af;
+    padding-top: 1px;
+}
+QPushButton#PrimaryButton:focus {
+    border: 1px solid #0f172a;
 }
 QPushButton#NavButton, QPushButton#NavButtonActive {
     min-height: 42px;
@@ -271,6 +280,20 @@ QPushButton#SubtleButton {
     background: #ffffff;
     border: 1px solid #d4deeb;
 }
+QPushButton#SubtleButton:hover {
+    color: #1d4ed8;
+    background: #eaf2ff;
+    border-color: #93c5fd;
+}
+QPushButton#SubtleButton:pressed {
+    color: #1e40af;
+    background: #dbeafe;
+    border-color: #60a5fa;
+    padding-top: 1px;
+}
+QPushButton#SubtleButton:focus {
+    border: 1px solid #3b82f6;
+}
 QPushButton#DangerButton {
     color: white;
     background: #dc2626;
@@ -279,6 +302,12 @@ QPushButton#DangerButton {
 }
 QPushButton#DangerButton:hover {
     background: #b91c1c;
+    border-color: #b91c1c;
+}
+QPushButton#DangerButton:pressed {
+    background: #991b1b;
+    border-color: #991b1b;
+    padding-top: 1px;
 }
 QPushButton#FormatButton,
 QPushButton#FormatButtonWide {
@@ -300,6 +329,16 @@ QPushButton#FormatButton:hover,
 QPushButton#FormatButtonWide:hover {
     background: #eaf2ff;
     border-color: #93c5fd;
+}
+QPushButton#FormatButton:pressed,
+QPushButton#FormatButtonWide:pressed {
+    background: #dbeafe;
+    border-color: #60a5fa;
+    padding-top: 1px;
+}
+QPushButton#FormatButton:focus,
+QPushButton#FormatButtonWide:focus {
+    border: 1px solid #3b82f6;
 }
 QPushButton#ColorButtonBlack,
 QPushButton#ColorButtonBlue,
