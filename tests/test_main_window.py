@@ -1,6 +1,8 @@
 from dataclasses import replace
 from pathlib import Path
 
+from PySide6.QtGui import QColor, QPixmap
+
 from safebox.core.services import VaultService
 from safebox.core.transfer import TransferMessageKind, TransferMessageSender
 from safebox.core.vault_profiles import load_profile_settings, vault_path_for_name
@@ -595,6 +597,134 @@ def test_transfer_detail_downloads_attachments(
 
     assert (download_dir / "invoice.pdf").exists()
     assert window.transfer_detail_notice.text() == "已下载 1 个附件"
+
+    window.close()
+
+
+def test_transfer_image_attachment_opens_preview(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    image_path = tmp_path / "invoice.png"
+    pixmap = QPixmap(2, 2)
+    pixmap.fill(QColor("#2563eb"))
+    assert pixmap.save(str(image_path), "PNG")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.IMAGE,
+        filename="invoice.png",
+        mime_type="image/png",
+        size_bytes=image_path.stat().st_size,
+        storage_path=str(image_path),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._preview_first_transfer_image()
+
+    assert window.image_preview_dialog.windowTitle() == "invoice.png"
+    assert not window.image_preview_pixmap.isNull()
+
+    window.image_preview_dialog.close()
+    window.close()
+
+
+def test_transfer_image_preview_reports_missing_source(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.IMAGE,
+        filename="missing.png",
+        mime_type="image/png",
+        size_bytes=100,
+        storage_path=str(tmp_path / "missing.png"),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._preview_first_transfer_image()
+
+    assert "图片文件不存在" in window.transfer_chat_meta.text()
+
+    window.close()
+
+
+def test_transfer_image_preview_ignores_non_image_attachment(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    source = tmp_path / "invoice.pdf"
+    source.write_text("pdf", encoding="utf-8")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=source.stat().st_size,
+        storage_path=str(source),
+        sha256="abc123",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window._open_transfer_item(window.transfer_list.item(0))
+
+    window._preview_first_transfer_image()
+
+    assert "当前会话没有图片附件" in window.transfer_chat_meta.text()
 
     window.close()
 

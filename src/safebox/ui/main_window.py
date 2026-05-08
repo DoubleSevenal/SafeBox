@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -434,6 +435,7 @@ class MainWindow(QMainWindow):
         self.transfer_organize_menu = QMenu(self)
         export_note_action = self.transfer_organize_menu.addAction("转存为小纸条")
         show_attachments_action = self.transfer_organize_menu.addAction("查看附件")
+        preview_image_action = self.transfer_organize_menu.addAction("预览图片")
         download_attachments_action = self.transfer_organize_menu.addAction("下载全部附件")
         close_chat_action = self.transfer_organize_menu.addAction("关闭此次对话")
         self.transfer_organize_button.setMenu(self.transfer_organize_menu)
@@ -474,6 +476,7 @@ class MainWindow(QMainWindow):
         back.clicked.connect(self._show_transfer_list_page)
         export_note_action.triggered.connect(self._export_current_transfer_to_note)
         show_attachments_action.triggered.connect(self._show_current_transfer_attachments)
+        preview_image_action.triggered.connect(self._preview_first_transfer_image)
         download_attachments_action.triggered.connect(self._download_current_transfer_attachments)
         close_chat_action.triggered.connect(self._close_current_transfer_chat)
         self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
@@ -1266,6 +1269,57 @@ class MainWindow(QMainWindow):
             )
             downloaded += 1
         message = f"已下载 {downloaded} 个附件"
+        if self.pages.currentWidget() == self.transfer_chat_page:
+            self.transfer_chat_meta.setText(
+                f"{self._transfer_chat_meta(self.current_transfer_id)} · {message}"
+            )
+        else:
+            self.transfer_detail_notice.setText(message)
+
+    def _preview_first_transfer_image(self) -> None:
+        if not self.current_transfer_id:
+            return
+        attachment = self._first_transfer_image_attachment(self.current_transfer_id)
+        if attachment is None:
+            self._set_transfer_attachment_status("当前会话没有图片附件")
+            return
+        source = Path(attachment.storage_path)
+        if not source.exists():
+            self._set_transfer_attachment_status("图片文件不存在")
+            return
+        pixmap = QPixmap(str(source))
+        if pixmap.isNull():
+            self._set_transfer_attachment_status("图片无法预览")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(attachment.filename)
+        dialog.resize(720, 520)
+        layout = QVBoxLayout(dialog)
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setPixmap(
+            pixmap.scaled(
+                680,
+                460,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        layout.addWidget(label)
+        self.image_preview_dialog = dialog
+        self.image_preview_pixmap = pixmap
+        dialog.show()
+
+    def _first_transfer_image_attachment(self, conversation_id: str):
+        for attachment in self.service.list_transfer_attachments(conversation_id):
+            if attachment.mime_type.startswith("image/"):
+                return attachment
+            suffix = Path(attachment.filename).suffix.casefold()
+            if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                return attachment
+        return None
+
+    def _set_transfer_attachment_status(self, message: str) -> None:
         if self.pages.currentWidget() == self.transfer_chat_page:
             self.transfer_chat_meta.setText(
                 f"{self._transfer_chat_meta(self.current_transfer_id)} · {message}"
