@@ -520,12 +520,11 @@ class MainWindow(QMainWindow):
         self.transfer_detail_title.setObjectName("HeroTitle")
         self.transfer_detail_meta = QLabel("")
         self.transfer_detail_meta.setObjectName("HeroMeta")
-        self.transfer_detail_notice = QLabel("只读查看：后续阶段将显示完整聊天内容和附件列表")
+        self.transfer_detail_notice = QLabel("只读查看：可复制消息文本，也可预览或下载附件")
         self.transfer_detail_notice.setObjectName("DataStatus")
         self.transfer_detail_notice.setWordWrap(True)
-        self.transfer_detail_body = QTextEdit()
-        self.transfer_detail_body.setObjectName("DetailNote")
-        self.transfer_detail_body.setReadOnly(True)
+        self.transfer_detail_messages_view = TransferMessageList()
+        self.transfer_detail_messages_view.setObjectName("TransferMessageList")
         top.addWidget(back)
         top.addStretch()
         top.addWidget(self.transfer_detail_attachments_button)
@@ -539,7 +538,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(top)
         layout.addWidget(hero)
         layout.addWidget(self.transfer_detail_notice)
-        layout.addWidget(self.transfer_detail_body, 1)
+        layout.addWidget(self.transfer_detail_messages_view, 1)
 
         back.clicked.connect(self._show_transfer_list_page)
         self.transfer_detail_attachments_button.clicked.connect(
@@ -1377,7 +1376,10 @@ class MainWindow(QMainWindow):
         self.transfer_detail_meta.setText(
             f"{conversation.device_name} · {self._transfer_conversation_status_label(conversation)}"
         )
-        self.transfer_detail_body.setPlainText(self._format_transfer_messages(conversation.id))
+        self._render_transfer_messages(
+            conversation.id,
+            target_view=self.transfer_detail_messages_view,
+        )
         self._remember_module_page("transfer", self.transfer_detail_page)
         self.pages.setCurrentWidget(self.transfer_detail_page)
 
@@ -1620,14 +1622,21 @@ class MainWindow(QMainWindow):
             lines.append(f"{sender} {message.created_at}{edited_label}\n{content}")
         return "\n\n".join(lines)
 
-    def _render_transfer_messages(self, conversation_id: str) -> None:
+    def _render_transfer_messages(
+        self,
+        conversation_id: str,
+        *,
+        target_view: TransferMessageList | None = None,
+    ) -> None:
+        view = target_view or self.transfer_messages_view
         messages = self.service.list_transfer_messages(conversation_id)
         attachments = self.service.list_transfer_attachments(conversation_id)
         signature = self._transfer_messages_signature(messages, attachments)
-        if signature == self.transfer_messages_signature:
+        if target_view is None and signature == self.transfer_messages_signature:
             return
-        self.transfer_messages_signature = signature
-        self.transfer_messages_view.set_messages(
+        if target_view is None:
+            self.transfer_messages_signature = signature
+        view.set_messages(
             messages,
             {attachment.id: attachment.filename for attachment in attachments},
             preview_attachment=self._preview_transfer_attachment_by_id,
