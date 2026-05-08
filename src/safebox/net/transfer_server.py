@@ -130,11 +130,20 @@ MOBILE_PAGE = """<!doctype html>
       document.getElementById('pairBox').className = paired ? 'pair hidden' : 'pair';
     }
 
+    function setWritable(writable) {
+      document.getElementById('text').disabled = !writable;
+      document.getElementById('file').disabled = !writable;
+      for (const button of document.querySelectorAll('button')) {
+        if (button.textContent !== '验证') button.disabled = !writable;
+      }
+    }
+
     async function initSession() {
       const response = await fetch('/api/session');
       if (!response.ok) return;
       const session = await response.json();
       setPaired(session.paired);
+      setWritable(session.status !== 'closed');
       if (paired) loadMessages();
     }
 
@@ -307,12 +316,16 @@ class TransferHttpServer:
                     self._send_text(HTTPStatus.OK, MOBILE_PAGE, "text/html; charset=utf-8")
                     return
                 if self.path == "/api/session":
+                    conversation = owner.service.get_transfer_conversation(
+                        owner.conversation_id
+                    )
                     self._send_json(
                         HTTPStatus.OK,
                         {
                             "conversation_id": owner.conversation_id,
                             "device_name": owner.device_name,
                             "paired": owner.paired,
+                            "status": conversation.status.value,
                         },
                     )
                     return

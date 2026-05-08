@@ -142,9 +142,11 @@ def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     assert "initSession()" in html
     assert "refreshAfterWrite()" in html
     assert "editMessage(" in html
+    assert "setWritable(" in html
     assert session["conversation_id"] == server.conversation_id
     assert session["device_name"] == "手机浏览器"
     assert session["paired"] is False
+    assert session["status"] == "active"
 
 
 def test_transfer_server_exposes_display_url_with_lan_ip(vault_path) -> None:
@@ -363,6 +365,8 @@ def test_transfer_server_closes_conversation_from_paired_phone(vault_path) -> No
     try:
         _request_json(f"{server.url}/api/pair", {"code": "123456"})
         result = _request_json(f"{server.url}/api/close", {})
+        with urlopen(f"{server.url}/api/session", timeout=5) as response:
+            session = json.loads(response.read().decode("utf-8"))
         blocked_status = _request_error_code(
             f"{server.url}/api/messages",
             {"text": "关闭后不应该写入"},
@@ -373,6 +377,7 @@ def test_transfer_server_closes_conversation_from_paired_phone(vault_path) -> No
     conversation = service.get_transfer_conversation(server.conversation_id)
 
     assert result == {"ok": True, "status": "closed"}
+    assert session["status"] == "closed"
     assert conversation.status.value == "closed"
     assert conversation.closed_at
     assert blocked_status == 400
