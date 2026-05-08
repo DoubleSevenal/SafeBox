@@ -483,6 +483,38 @@ def test_active_transfer_chat_refreshes_phone_message_without_reopening(
     window.close()
 
 
+def test_active_transfer_chat_returns_to_list_when_phone_closes(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+
+    window.service.close_transfer_conversation(window.current_transfer_id)
+
+    window._refresh_active_transfer_chat()
+
+    assert window.pages.currentWidget() == window.transfer_page
+    assert not window.transfer_refresh_timer.isActive()
+    assert window.transfer_list.count() == 1
+    conversation = window.service.get_transfer_conversation(window.current_transfer_id)
+    assert conversation.status.value == "closed"
+
+    window.transfer_server.stop()
+    window.close()
+
+
 def test_active_transfer_chat_refreshes_attachment_summary(
     vault_path: Path,
     monkeypatch,

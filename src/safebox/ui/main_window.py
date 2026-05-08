@@ -1232,6 +1232,11 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
+            conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+            if conversation.status != TransferConversationStatus.ACTIVE:
+                self.transfer_refresh_timer.stop()
+                self._show_transfer_list_page()
+                return
             self.transfer_chat_meta.setText(self._transfer_chat_meta(self.current_transfer_id))
             self.transfer_messages_view.setPlainText(
                 self._format_transfer_messages(self.current_transfer_id)
