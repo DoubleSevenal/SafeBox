@@ -41,7 +41,11 @@ from safebox.core.record_sorting import (
 )
 from safebox.core.services import try_unlock
 from safebox.core.settings import AppSettings
-from safebox.core.transfer import TransferConversationStatus, TransferMessageSender
+from safebox.core.transfer import (
+    TransferConversationStatus,
+    TransferMessageKind,
+    TransferMessageSender,
+)
 from safebox.core.vault_profiles import (
     VaultProfileSettings,
     app_data_dir,
@@ -460,6 +464,8 @@ class MainWindow(QMainWindow):
         self.transfer_message_input.setFixedHeight(92)
         self.transfer_send_button = QPushButton("发送")
         self.transfer_send_button.setObjectName("PrimaryButton")
+        self.transfer_edit_last_button = QPushButton("编辑上一条")
+        self.transfer_edit_last_button.setObjectName("SubtleButton")
         hero = QFrame()
         hero.setObjectName("DetailHero")
         hero_layout = QVBoxLayout(hero)
@@ -468,6 +474,7 @@ class MainWindow(QMainWindow):
         hero_layout.addWidget(self.transfer_chat_meta)
         input_row = QHBoxLayout()
         input_row.addWidget(self.transfer_message_input, 1)
+        input_row.addWidget(self.transfer_edit_last_button)
         input_row.addWidget(self.transfer_send_button)
         top.addWidget(back)
         top.addStretch()
@@ -486,6 +493,7 @@ class MainWindow(QMainWindow):
         close_chat_action.triggered.connect(self._close_current_transfer_chat)
         self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
         self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
+        self.transfer_edit_last_button.clicked.connect(self._edit_last_transfer_text)
         return page
 
     def _build_note_detail_page(self) -> QWidget:
@@ -1249,6 +1257,25 @@ class MainWindow(QMainWindow):
         self.service.add_transfer_text_message(
             self.current_transfer_id,
             sender=TransferMessageSender.DESKTOP,
+            text=text,
+        )
+        self.transfer_message_input.clear()
+        self._show_transfer_chat(self.current_transfer_id)
+
+    def _edit_last_transfer_text(self) -> None:
+        if not self.current_transfer_id:
+            return
+        text = self.transfer_message_input.toPlainText()
+        messages = [
+            message
+            for message in self.service.list_transfer_messages(self.current_transfer_id)
+            if message.kind == TransferMessageKind.TEXT
+        ]
+        if not messages:
+            return
+        self.service.edit_transfer_text_message(
+            self.current_transfer_id,
+            messages[-1].id,
             text=text,
         )
         self.transfer_message_input.clear()

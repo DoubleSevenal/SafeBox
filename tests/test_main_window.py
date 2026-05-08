@@ -403,6 +403,42 @@ def test_transfer_chat_sends_text_and_closes_to_history(
     window.close()
 
 
+def test_transfer_chat_edits_last_text_message(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+    window.transfer_message_input.setPlainText("旧内容")
+    window.transfer_send_button.click()
+    window.transfer_message_input.setPlainText("新内容")
+
+    window.transfer_edit_last_button.click()
+
+    messages = window.service.list_transfer_messages(window.current_transfer_id)
+
+    assert len(messages) == 1
+    assert messages[0].text == "新内容"
+    assert messages[0].edited_at
+    assert "新内容" in window.transfer_messages_view.toPlainText()
+    assert "旧内容" not in window.transfer_messages_view.toPlainText()
+    assert window.transfer_message_input.toPlainText() == ""
+
+    window.transfer_server.stop()
+    window.close()
+
+
 def test_transfer_server_phone_message_appears_in_current_chat(
     vault_path: Path,
     monkeypatch,
