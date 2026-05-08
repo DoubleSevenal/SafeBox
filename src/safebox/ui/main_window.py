@@ -460,9 +460,8 @@ class MainWindow(QMainWindow):
         self.transfer_chat_connection.setObjectName("DataStatus")
         self.transfer_chat_connection.setWordWrap(True)
         self.transfer_chat_connection.setVisible(False)
-        self.transfer_messages_view = QTextEdit()
-        self.transfer_messages_view.setObjectName("DetailNote")
-        self.transfer_messages_view.setReadOnly(True)
+        self.transfer_messages_view = TransferMessageList()
+        self.transfer_messages_view.setObjectName("TransferMessageList")
         self.transfer_message_input = QTextEdit()
         self.transfer_message_input.setObjectName("TransferMessageInput")
         self.transfer_message_input.setPlaceholderText("输入要发送给手机的文字")
@@ -1240,7 +1239,7 @@ class MainWindow(QMainWindow):
         if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
             self.transfer_chat_connection.setText("")
             self.transfer_chat_connection.setVisible(False)
-        self.transfer_messages_view.setPlainText(self._format_transfer_messages(conversation_id))
+        self._render_transfer_messages(conversation_id)
         self.transfer_message_input.setEnabled(writable)
         self.transfer_send_button.setEnabled(writable)
         self.transfer_edit_last_button.setEnabled(writable)
@@ -1266,9 +1265,7 @@ class MainWindow(QMainWindow):
                 self._show_transfer_list_page()
                 return
             self.transfer_chat_meta.setText(self._transfer_chat_meta(self.current_transfer_id))
-            self.transfer_messages_view.setPlainText(
-                self._format_transfer_messages(self.current_transfer_id)
-            )
+            self._render_transfer_messages(self.current_transfer_id)
         except KeyError:
             self.transfer_refresh_timer.stop()
 
@@ -1299,27 +1296,33 @@ class MainWindow(QMainWindow):
         ]
         if not messages:
             return
-        message_by_label: dict[str, str] = {}
-        labels: list[str] = []
-        for message in messages:
-            sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
-            preview = message.text.replace("\n", " ")[:28]
-            label = f"{sender} {preview}"
-            labels.append(label)
-            message_by_label[label] = message.id
-        selected, accepted = QInputDialog.getItem(
-            self,
-            "编辑消息",
-            "选择要编辑的文本消息",
-            labels,
-            len(labels) - 1,
-            False,
-        )
-        if not accepted or not selected:
-            return
+        selected_id = self.transfer_messages_view.selected_message_id()
+        if selected_id and any(message.id == selected_id for message in messages):
+            target_message_id = selected_id
+        else:
+            target_message_id = ""
+            message_by_label: dict[str, str] = {}
+            labels: list[str] = []
+            for message in messages:
+                sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+                preview = message.text.replace("\n", " ")[:28]
+                label = f"{sender} {preview}"
+                labels.append(label)
+                message_by_label[label] = message.id
+            selected, accepted = QInputDialog.getItem(
+                self,
+                "编辑消息",
+                "选择要编辑的文本消息",
+                labels,
+                len(labels) - 1,
+                False,
+            )
+            if not accepted or not selected:
+                return
+            target_message_id = message_by_label[selected]
         self.service.edit_transfer_text_message(
             self.current_transfer_id,
-            message_by_label[selected],
+            target_message_id,
             text=text,
         )
         self.transfer_message_input.clear()
@@ -1350,6 +1353,16 @@ class MainWindow(QMainWindow):
             )
             lines.append(f"{sender} {message.created_at}{edited_label}\n{content}")
         return "\n\n".join(lines)
+
+    def _render_transfer_messages(self, conversation_id: str) -> None:
+        messages = self.service.list_transfer_messages(conversation_id)
+        self.transfer_messages_view.set_messages(
+            messages,
+            {
+                attachment.id: attachment.filename
+                for attachment in self.service.list_transfer_attachments(conversation_id)
+            },
+        )
 
     def _show_current_transfer_attachments(self) -> None:
         if not self.current_transfer_id:
@@ -2063,6 +2076,69 @@ class RecordListItem(QWidget):
         category.setMinimumWidth(72)
         layout.addLayout(text_layout, 1)
         layout.addWidget(category, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+
+
+class TransferMessageList(QListWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self._plain_text = ""
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+    def set_messages(
+        self,
+        messages,
+        attachment_names: dict[str, str],
+    ) -> None:
+        self.clear()
+        blocks: list[str] = []
+        for message in messages:
+            sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            edited_label = " · 已编辑" if message.edited_at else ""
+            content = message.text
+            if message.kind in {TransferMessageKind.IMAGE, TransferMessageKind.FILE}:
+                filename = attachment_names.get(message.attachment_id, "未知附件")
+                content = f"[附件] {filename}"
+            blocks.append(f"{sender} {message.created_at}{edited_label}\n{content}")
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, message.id)
+            item.setSizeHint(QSize(0, max(82, 58 + (len(content) // 32) * 22)))
+            self.addItem(item)
+            self.setItemWidget(
+                item,
+                TransferMessageItem(
+                    sender=sender,
+                    created_at=message.created_at,
+                    text=content,
+                    edited=bool(message.edited_at),
+                ),
+            )
+        self._plain_text = "\n\n".join(blocks)
+
+    def setPlainText(self, text: str) -> None:
+        self.clear()
+        self._plain_text = text
+
+    def toPlainText(self) -> str:
+        return self._plain_text
+
+    def selected_message_id(self) -> str:
+        item = self.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+
+
+class TransferMessageItem(QWidget):
+    def __init__(self, *, sender: str, created_at: str, text: str, edited: bool) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(5)
+        meta = QLabel(f"{sender} {created_at}{' · 已编辑' if edited else ''}")
+        meta.setObjectName("RecordSubtitle")
+        body = QLabel(text)
+        body.setObjectName("RecordTitle")
+        body.setWordWrap(True)
+        layout.addWidget(meta)
+        layout.addWidget(body)
 
 
 def _category_color_key(category: str) -> str:

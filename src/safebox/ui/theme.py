@@ -567,6 +567,12 @@ QListWidget {
 QListWidget#RecordList {
     border-radius: 16px;
 }
+QListWidget#TransferMessageList {
+    background: #ffffff;
+    border: 1px solid #dbe5f3;
+    border-radius: 16px;
+    padding: 8px;
+}
 QListWidget::item {
     min-height: 62px;
     padding: 0;
