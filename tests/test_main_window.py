@@ -423,6 +423,11 @@ def test_transfer_chat_edits_last_text_message(
     window.transfer_message_input.setPlainText("旧内容")
     window.transfer_send_button.click()
     window.transfer_message_input.setPlainText("新内容")
+    monkeypatch.setattr(
+        main_window.QInputDialog,
+        "getItem",
+        lambda *args, **kwargs: ("电脑 旧内容", True),
+    )
 
     window.transfer_edit_last_button.click()
 
@@ -434,6 +439,56 @@ def test_transfer_chat_edits_last_text_message(
     assert "新内容" in window.transfer_messages_view.toPlainText()
     assert "旧内容" not in window.transfer_messages_view.toPlainText()
     assert window.transfer_message_input.toPlainText() == ""
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_transfer_chat_edits_selected_text_message(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+    first = window.service.add_transfer_text_message(
+        window.current_transfer_id,
+        sender=TransferMessageSender.DESKTOP,
+        text="第一条",
+    )
+    second = window.service.add_transfer_text_message(
+        window.current_transfer_id,
+        sender=TransferMessageSender.PHONE,
+        text="第二条旧内容",
+    )
+    window._show_transfer_chat(window.current_transfer_id)
+    window.transfer_message_input.setPlainText("第二条新内容")
+
+    monkeypatch.setattr(
+        main_window.QInputDialog,
+        "getItem",
+        lambda *args, **kwargs: ("手机 第二条旧内容", True),
+    )
+
+    window.transfer_edit_last_button.click()
+
+    messages = window.service.list_transfer_messages(window.current_transfer_id)
+
+    assert messages[0].id == first.id
+    assert messages[0].text == "第一条"
+    assert messages[1].id == second.id
+    assert messages[1].text == "第二条新内容"
+    assert "第二条新内容" in window.transfer_messages_view.toPlainText()
 
     window.transfer_server.stop()
     window.close()

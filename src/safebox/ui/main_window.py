@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -464,7 +465,7 @@ class MainWindow(QMainWindow):
         self.transfer_message_input.setFixedHeight(92)
         self.transfer_send_button = QPushButton("发送")
         self.transfer_send_button.setObjectName("PrimaryButton")
-        self.transfer_edit_last_button = QPushButton("编辑上一条")
+        self.transfer_edit_last_button = QPushButton("编辑消息")
         self.transfer_edit_last_button.setObjectName("SubtleButton")
         hero = QFrame()
         hero.setObjectName("DetailHero")
@@ -1273,9 +1274,27 @@ class MainWindow(QMainWindow):
         ]
         if not messages:
             return
+        message_by_label: dict[str, str] = {}
+        labels: list[str] = []
+        for message in messages:
+            sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            preview = message.text.replace("\n", " ")[:28]
+            label = f"{sender} {preview}"
+            labels.append(label)
+            message_by_label[label] = message.id
+        selected, accepted = QInputDialog.getItem(
+            self,
+            "编辑消息",
+            "选择要编辑的文本消息",
+            labels,
+            len(labels) - 1,
+            False,
+        )
+        if not accepted or not selected:
+            return
         self.service.edit_transfer_text_message(
             self.current_transfer_id,
-            messages[-1].id,
+            message_by_label[selected],
             text=text,
         )
         self.transfer_message_input.clear()
