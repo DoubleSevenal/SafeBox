@@ -419,9 +419,16 @@ class MainWindow(QMainWindow):
         self.transfer_connect_title.setObjectName("HeroTitle")
         self.transfer_connect_meta = QLabel("让手机和电脑连接同一个 WiFi，或手机给电脑开热点。")
         self.transfer_connect_meta.setObjectName("HeroMeta")
-        self.transfer_connect_info = QLabel("")
-        self.transfer_connect_info.setObjectName("DataStatus")
-        self.transfer_connect_info.setWordWrap(True)
+        self.transfer_connect_url_value = QLabel("")
+        self.transfer_connect_url_value.setObjectName("SettingsValue")
+        self.transfer_connect_url_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.transfer_connect_code_value = QLabel("")
+        self.transfer_connect_code_value.setObjectName("SettingsValue")
+        self.transfer_connect_code_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         self.transfer_connect_copy_button = QPushButton("复制链接和验证码")
         self.transfer_connect_copy_button.setObjectName("PrimaryButton")
         self.transfer_connect_status = QLabel("等待手机输入验证码。")
@@ -433,27 +440,70 @@ class MainWindow(QMainWindow):
         hero_layout.setContentsMargins(20, 16, 20, 16)
         hero_layout.addWidget(self.transfer_connect_title)
         hero_layout.addWidget(self.transfer_connect_meta)
-        guide = QFrame()
-        guide.setObjectName("SettingsCard")
-        guide_layout = QVBoxLayout(guide)
-        guide_layout.setContentsMargins(18, 16, 18, 16)
-        guide_layout.setSpacing(12)
-        guide_layout.addWidget(QLabel("1. 手机打开下面的访问地址。"))
-        guide_layout.addWidget(QLabel("2. 输入验证码完成连接。"))
-        guide_layout.addWidget(QLabel("3. 验证成功后电脑会自动进入聊天窗口。"))
-        guide_layout.addWidget(self.transfer_connect_info)
-        guide_layout.addWidget(self.transfer_connect_copy_button)
+        connect_card = QFrame()
+        connect_card.setObjectName("SettingsCard")
+        connect_layout = QVBoxLayout(connect_card)
+        connect_layout.setContentsMargins(18, 16, 18, 16)
+        connect_layout.setSpacing(14)
+        connect_title = QLabel("手机浏览器连接")
+        connect_title.setObjectName("SettingsCardTitle")
+        connect_hint = QLabel("在手机浏览器打开地址，输入验证码后电脑会自动进入聊天窗口。")
+        connect_hint.setObjectName("SettingsCardHint")
+        connect_hint.setWordWrap(True)
+        connect_layout.addWidget(connect_title)
+        connect_layout.addWidget(connect_hint)
+        connect_layout.addWidget(
+            self._transfer_connect_info_row("访问地址", self.transfer_connect_url_value)
+        )
+        connect_layout.addWidget(
+            self._transfer_connect_info_row("验证码", self.transfer_connect_code_value)
+        )
+        actions = QHBoxLayout()
+        actions.addWidget(self.transfer_connect_status, 1)
+        actions.addWidget(self.transfer_connect_copy_button)
+        connect_layout.addLayout(actions)
+        steps = QFrame()
+        steps.setObjectName("SettingsCard")
+        steps_layout = QVBoxLayout(steps)
+        steps_layout.setContentsMargins(18, 16, 18, 16)
+        steps_layout.setSpacing(8)
+        steps_title = QLabel("连接步骤")
+        steps_title.setObjectName("SettingsCardTitle")
+        steps_layout.addWidget(steps_title)
+        for text in (
+            "1. 确认手机和电脑在同一个 WiFi，或手机给电脑开热点。",
+            "2. 手机打开访问地址，输入验证码。",
+            "3. 验证成功后自动进入本次聊天。",
+        ):
+            row = QLabel(text)
+            row.setObjectName("SettingsValue")
+            row.setWordWrap(True)
+            steps_layout.addWidget(row)
         top.addWidget(back)
         top.addStretch()
         layout.addLayout(top)
         layout.addWidget(hero)
-        layout.addWidget(guide)
-        layout.addWidget(self.transfer_connect_status)
+        layout.addWidget(connect_card)
+        layout.addWidget(steps)
         layout.addStretch()
 
         back.clicked.connect(self._show_transfer_list_page)
         self.transfer_connect_copy_button.clicked.connect(self._copy_transfer_link)
         return page
+
+    def _transfer_connect_info_row(self, label: str, value: QLabel) -> QFrame:
+        row = QFrame()
+        row.setObjectName("SettingsRow")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(12)
+        title = QLabel(label)
+        title.setObjectName("SettingsLabel")
+        title.setFixedWidth(86)
+        value.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(value, 1)
+        return row
 
     def _build_transfer_detail_page(self) -> QWidget:
         page = QWidget()
@@ -1332,6 +1382,13 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentWidget(self.transfer_detail_page)
 
     def _show_connect_phone_placeholder(self) -> None:
+        active_conversation = self._open_transfer_conversation()
+        if active_conversation is not None:
+            self.transfer_status.setText(
+                "已有进行中的手机会话，请先进入该会话并关闭此次对话。"
+            )
+            self.transfer_status.setVisible(True)
+            return
         if self.transfer_server is not None:
             self._stop_transfer_server(close_conversation=True)
         self.transfer_server = TransferHttpServer(self.service)
@@ -1343,15 +1400,19 @@ class MainWindow(QMainWindow):
         )
         self.transfer_status.setVisible(True)
         self.current_transfer_id = self.transfer_server.conversation_id
-        self.transfer_connect_info.setText(
-            f"手机访问：{self.transfer_server.display_url}\n"
-            f"验证码：{self.transfer_server.verification_code}"
-        )
+        self.transfer_connect_url_value.setText(self.transfer_server.display_url)
+        self.transfer_connect_code_value.setText(self.transfer_server.verification_code)
         self.transfer_connect_status.setText("等待手机输入验证码。")
         self._remember_module_page("transfer", self.transfer_connect_page)
         self._set_nav("transfer")
         self.pages.setCurrentWidget(self.transfer_connect_page)
         self.transfer_pair_timer.start()
+
+    def _open_transfer_conversation(self):
+        for conversation in self.service.list_transfer_conversations():
+            if self._transfer_conversation_is_open(conversation):
+                return conversation
+        return None
 
     def _check_transfer_pairing(self) -> None:
         if self.transfer_server is None:
@@ -1489,11 +1550,7 @@ class MainWindow(QMainWindow):
             "链接已复制，验证码请手动输入到手机页面。"
         )
         if self.pages.currentWidget() == self.transfer_connect_page:
-            self.transfer_connect_info.setText(
-                f"手机访问：{self.transfer_server.display_url}\n"
-                f"验证码：{self.transfer_server.verification_code}\n"
-                "链接和验证码已复制。"
-            )
+            self.transfer_connect_status.setText("链接和验证码已复制。")
 
     def _refresh_transfer_connection_status(self, conversation) -> None:
         if self.transfer_server is None or conversation.id != self.transfer_server.conversation_id:
@@ -2571,6 +2628,7 @@ class TransferMessageItem(QWidget):
         layout.setSpacing(5)
         meta = QLabel(f"{sender} {created_at}{' · 已编辑' if edited else ''}")
         meta.setObjectName("TransferBubbleMeta")
+        meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         attachment_name = text.removeprefix("[附件] ").strip()
         display_text = (
             f"{attachment_label}\n{attachment_name}\n点击后可在整理中预览或下载"
@@ -2580,6 +2638,8 @@ class TransferMessageItem(QWidget):
         body = QLabel(display_text)
         body.setObjectName("TransferBubbleText")
         body.setWordWrap(True)
+        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        body.setCursor(Qt.CursorShape.IBeamCursor)
         layout.addWidget(meta)
         layout.addWidget(body)
         if attachment_label and attachment_id:
