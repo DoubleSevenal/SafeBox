@@ -314,9 +314,38 @@ QPushButton#PrimaryButton:focus {
     border: 1px solid #0f172a;
 }
 QPushButton#PrimaryButton:disabled {
-    color: #e2e8f0;
-    background: #94a3b8;
-    border-color: #94a3b8;
+    color: #334155;
+    background: #e2e8f0;
+    border-color: #cbd5e1;
+}
+QPushButton#SyncNowButton {
+    color: #ffffff;
+    background: #2563eb;
+    border: 1px solid #2563eb;
+    font-weight: 750;
+    min-height: 36px;
+    padding: 0 16px;
+    border-radius: 10px;
+}
+QPushButton#SyncNowButton:hover {
+    color: #ffffff;
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+}
+QPushButton#SyncNowButton:pressed {
+    color: #ffffff;
+    background: #1e40af;
+    border-color: #1e40af;
+    padding-top: 1px;
+}
+QPushButton#SyncNowButton:focus {
+    color: #ffffff;
+    border: 1px solid #0f172a;
+}
+QPushButton#SyncNowButton:disabled {
+    color: #334155;
+    background: #e2e8f0;
+    border-color: #cbd5e1;
 }
 QPushButton#NavButton, QPushButton#NavButtonActive {
     min-height: 42px;
