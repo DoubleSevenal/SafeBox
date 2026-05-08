@@ -20,12 +20,37 @@ def _request_json(url: str, payload: dict[str, str]) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _request_json_method(url: str, payload: dict[str, str], method: str) -> dict:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def _request_error_code(url: str, payload: dict[str, str]) -> int:
     request = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
+    )
+    try:
+        urlopen(request, timeout=5)
+    except HTTPError as exc:
+        return exc.code
+    return 200
+
+
+def _request_error_code_method(url: str, payload: dict[str, str], method: str) -> int:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method=method,
     )
     try:
         urlopen(request, timeout=5)
@@ -102,6 +127,7 @@ def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     assert "验证" in html
     assert "initSession()" in html
     assert "refreshAfterWrite()" in html
+    assert "editMessage(" in html
     assert session["conversation_id"] == server.conversation_id
     assert session["device_name"] == "手机浏览器"
     assert session["paired"] is False
@@ -237,6 +263,61 @@ def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
             "updated_at": desktop_message.updated_at,
         }
     ]
+
+
+def test_transfer_server_edits_text_message_for_paired_phone(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        message = service.add_transfer_text_message(
+            server.conversation_id,
+            sender=TransferMessageSender.PHONE,
+            text="旧内容",
+        )
+        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        result = _request_json_method(
+            f"{server.url}/api/messages/{message.id}",
+            {"text": "新内容"},
+            "PATCH",
+        )
+    finally:
+        server.stop()
+
+    messages = service.list_transfer_messages(server.conversation_id)
+
+    assert result["ok"] is True
+    assert result["message_id"] == message.id
+    assert messages[0].text == "新内容"
+    assert messages[0].edited_at
+
+
+def test_transfer_server_rejects_text_edit_before_pairing(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = TransferHttpServer(service, verification_code="123456")
+
+    server.start()
+    try:
+        message = service.add_transfer_text_message(
+            server.conversation_id,
+            sender=TransferMessageSender.PHONE,
+            text="旧内容",
+        )
+        status = _request_error_code_method(
+            f"{server.url}/api/messages/{message.id}",
+            {"text": "新内容"},
+            "PATCH",
+        )
+    finally:
+        server.stop()
+
+    messages = service.list_transfer_messages(server.conversation_id)
+
+    assert status == 403
+    assert messages[0].text == "旧内容"
 
 
 def test_transfer_server_rejects_message_list_before_pairing(vault_path) -> None:

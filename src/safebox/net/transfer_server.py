@@ -56,6 +56,13 @@ MOBILE_PAGE = """<!doctype html>
     .message.desktop { border-color: #bfdbfe; background: #eff6ff; }
     .message.phone { border-color: #d1fae5; background: #f0fdf4; }
     .meta { margin-bottom: 4px; color: #64748b; font-size: 13px; }
+    .message button {
+      min-height: 32px;
+      margin-top: 8px;
+      padding: 0 12px;
+      background: #e2e8f0;
+      color: #172033;
+    }
     textarea {
       box-sizing: border-box;
       width: 100%;
@@ -181,6 +188,17 @@ MOBILE_PAGE = """<!doctype html>
       document.getElementById('status').textContent = response.ok ? '会话已结束' : '结束失败';
       if (response.ok) refreshAfterWrite();
     }
+    async function editMessage(id, currentText) {
+      const text = prompt('编辑消息', currentText || '');
+      if (text === null) return;
+      const response = await fetch('/api/messages/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text})
+      });
+      document.getElementById('status').textContent = response.ok ? '已编辑' : '编辑失败';
+      if (response.ok) loadMessages();
+    }
     async function loadMessages() {
       const response = await fetch('/api/messages');
       if (!response.ok) return;
@@ -197,6 +215,12 @@ MOBILE_PAGE = """<!doctype html>
         body.textContent = item.text || item.filename || '[附件]';
         row.appendChild(meta);
         row.appendChild(body);
+        if (item.kind === 'text') {
+          const edit = document.createElement('button');
+          edit.textContent = '编辑';
+          edit.onclick = () => editMessage(item.id, item.text);
+          row.appendChild(edit);
+        }
         messages.appendChild(row);
       }
     }
@@ -311,6 +335,13 @@ class TransferHttpServer:
                     return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
+            def do_PATCH(self) -> None:
+                message_id = _message_id_from_path(self.path)
+                if message_id:
+                    self._handle_message_patch(message_id)
+                    return
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
             def _handle_pair_post(self) -> None:
                 payload = self._read_json()
                 code = str(payload.get("code", "")).strip()
@@ -374,6 +405,26 @@ class TransferHttpServer:
                         sender=TransferMessageSender.PHONE,
                         text=text,
                     )
+                except ValueError as exc:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                self._send_json(HTTPStatus.OK, {"ok": True, "message_id": message.id})
+
+            def _handle_message_patch(self, message_id: str) -> None:
+                if not owner.paired:
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "pair_required"})
+                    return
+                payload = self._read_json()
+                text = str(payload.get("text", "")).strip()
+                try:
+                    message = owner.service.edit_transfer_text_message(
+                        owner.conversation_id,
+                        message_id,
+                        text=text,
+                    )
+                except KeyError:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "message_not_found"})
+                    return
                 except ValueError as exc:
                     self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                     return
@@ -485,6 +536,14 @@ def _parse_multipart_file(
         payload = part.get_payload(decode=True) or b""
         return Path(filename).name, part.get_content_type(), payload
     return None
+
+
+def _message_id_from_path(path: str) -> str:
+    prefix = "/api/messages/"
+    if not path.startswith(prefix):
+        return ""
+    message_id = path[len(prefix) :].strip()
+    return message_id if message_id and "/" not in message_id else ""
 
 
 def _unique_path(path: Path) -> Path:
