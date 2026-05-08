@@ -287,6 +287,17 @@ class VaultService:
         self._save_transfer_conversation(existing)
         return existing
 
+    def delete_transfer_conversation(self, conversation_id: str) -> None:
+        existing = self.get_transfer_conversation(conversation_id)
+        if existing.status == TransferConversationStatus.ACTIVE:
+            raise ValueError("Active transfer conversation cannot be deleted")
+        if existing.deleted_at:
+            return
+        now = _now()
+        existing.deleted_at = now
+        existing.updated_at = now
+        self._save_transfer_conversation(existing)
+
     def add_transfer_text_message(
         self,
         conversation_id: str,
