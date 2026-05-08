@@ -70,6 +70,15 @@ QLabel#SuccessNotice {
     font-size: 14px;
     font-weight: 700;
 }
+QLabel#ToastNotice {
+    color: #065f46;
+    background: #ecfdf5;
+    border: 1px solid #86efac;
+    border-radius: 16px;
+    padding: 10px 18px;
+    font-size: 15px;
+    font-weight: 750;
+}
 QLabel#DataStatus {
     color: #475569;
     background: #ffffff;
@@ -134,6 +143,46 @@ QFrame#SettingsRow {
     background: #f8fbff;
     border: 1px solid #edf2f7;
     border-radius: 12px;
+}
+QFrame#AttachmentCard {
+    background: #ffffff;
+    border: 1px solid #dbe5f3;
+    border-radius: 14px;
+}
+QFrame#AttachmentCard:hover {
+    border-color: #93c5fd;
+    background: #fbfdff;
+}
+QLabel#AttachmentThumb {
+    min-width: 140px;
+    max-width: 140px;
+    min-height: 92px;
+    border-radius: 10px;
+    background: #f1f5f9;
+    color: #64748b;
+    font-weight: 700;
+}
+QLabel#AttachmentFileIcon {
+    min-width: 92px;
+    max-width: 92px;
+    min-height: 72px;
+    border-radius: 10px;
+    background: #eef2ff;
+    color: #3730a3;
+    font-weight: 750;
+}
+QLabel#AttachmentInfo {
+    color: #0f172a;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 650;
+}
+QScrollArea#AttachmentScroll {
+    border: 0;
+    background: transparent;
+}
+QScrollArea#AttachmentScroll QWidget {
+    background: transparent;
 }
 QLabel#SettingsLabel {
     color: #475569;
@@ -733,6 +782,12 @@ QLabel#TransferBubbleText {
     font-size: 15px;
     line-height: 1.45;
     background: transparent;
+}
+QLabel#TransferImagePreview {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 6px;
 }
 QListWidget::item {
     min-height: 62px;
