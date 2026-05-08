@@ -381,6 +381,45 @@ def test_sidebar_navigation_preserves_active_transfer_chat(
     window.close()
 
 
+def test_transfer_chat_exports_session_note_from_organize_menu(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+    window.transfer_message_input.setPlainText("发票图片稍后发你")
+    window.transfer_send_button.click()
+
+    window._export_current_transfer_to_note()
+
+    conversation = window.service.get_transfer_conversation(window.current_transfer_id)
+    note = window.service.get_record(conversation.note_id)
+    assert note.category == "会话"
+    assert "发票图片稍后发你" in note.note
+    assert "已转存为小纸条" in window.transfer_chat_meta.text()
+
+    window.transfer_message_input.setPlainText("后续自动追加")
+    window.transfer_send_button.click()
+    note = window.service.get_record(conversation.note_id)
+    assert "后续自动追加" in note.note
+
+    window._show_notes_page()
+    assert window.note_list.count() == 1
+
+    window.close()
+
+
 def test_explicit_back_resets_account_module_to_list(
     vault_path: Path,
     monkeypatch,

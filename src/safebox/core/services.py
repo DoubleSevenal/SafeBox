@@ -270,7 +270,8 @@ class VaultService:
         if existing.status == TransferConversationStatus.CLOSED:
             return existing
         now = _now()
-        existing.status = TransferConversationStatus.CLOSED
+        if existing.status != TransferConversationStatus.TRANSFERRED:
+            existing.status = TransferConversationStatus.CLOSED
         existing.closed_at = now
         existing.updated_at = now
         existing.note_sync_active = False
@@ -303,6 +304,8 @@ class VaultService:
         self._save_transfer_message(message)
         conversation.message_count += 1
         conversation.updated_at = now
+        if conversation.note_sync_active and conversation.note_id:
+            self._append_transfer_messages_to_note(conversation, [message])
         self._save_transfer_conversation(conversation)
         return message
 
@@ -316,6 +319,54 @@ class VaultService:
             )
             if not message.deleted_at
         ]
+
+    def export_transfer_conversation_to_note(self, conversation_id: str) -> Record:
+        conversation = self.get_transfer_conversation(conversation_id)
+        messages = self.list_transfer_messages(conversation_id)
+        if conversation.note_id:
+            note = self.get_record(conversation.note_id)
+            note.note = self._format_transfer_note(messages)
+            note.updated_at = _now()
+            note.category = "会话"
+            self._save(note)
+        else:
+            note = self.create_secure_note(
+                name=conversation.title,
+                note=self._format_transfer_note(messages),
+                category="会话",
+            )
+            conversation.note_id = note.id
+        conversation.note_sync_active = conversation.status != TransferConversationStatus.CLOSED
+        conversation.note_last_appended_message_id = messages[-1].id if messages else ""
+        conversation.status = TransferConversationStatus.TRANSFERRED
+        conversation.updated_at = _now()
+        self._save_transfer_conversation(conversation)
+        return note
+
+    def _append_transfer_messages_to_note(
+        self,
+        conversation: TransferConversation,
+        messages: list[TransferMessage],
+    ) -> None:
+        if not messages:
+            return
+        note = self.get_record(conversation.note_id)
+        addition = self._format_transfer_note(messages)
+        if note.note.strip():
+            note.note = f"{note.note.rstrip()}\n\n{addition}"
+        else:
+            note.note = addition
+        note.updated_at = _now()
+        note.category = "会话"
+        self._save(note)
+        conversation.note_last_appended_message_id = messages[-1].id
+
+    def _format_transfer_note(self, messages: list[TransferMessage]) -> str:
+        blocks: list[str] = []
+        for message in messages:
+            sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            blocks.append(f"{sender} {message.created_at}\n{message.text}")
+        return "\n\n".join(blocks)
 
     def _save(self, record: Record) -> None:
         self.store.upsert_record(self._require_box(), record)

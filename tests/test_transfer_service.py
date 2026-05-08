@@ -140,3 +140,94 @@ def test_change_master_password_reencrypts_transfer_messages(vault_path) -> None
     messages = service.list_transfer_messages(conversation.id)
 
     assert [message.text for message in messages] == ["发票图片稍后发你"]
+
+
+def test_transfer_conversation_exports_to_session_note(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_text_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        text="发票图片稍后发你",
+    )
+    service.add_transfer_text_message(
+        conversation.id,
+        sender=TransferMessageSender.DESKTOP,
+        text="收到",
+    )
+
+    note = service.export_transfer_conversation_to_note(conversation.id)
+    updated = service.get_transfer_conversation(conversation.id)
+
+    assert note.name == "报销资料"
+    assert note.category == "会话"
+    assert "手机 " in note.note
+    assert "发票图片稍后发你" in note.note
+    assert "\n\n电脑 " in note.note
+    assert "收到" in note.note
+    assert updated.note_id == note.id
+    assert updated.note_sync_active is True
+    assert updated.note_last_appended_message_id
+    assert updated.status == TransferConversationStatus.TRANSFERRED
+
+
+def test_exported_session_note_keeps_appending_until_conversation_closes(
+    vault_path,
+) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_text_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        text="第一条",
+    )
+    note = service.export_transfer_conversation_to_note(conversation.id)
+
+    service.add_transfer_text_message(
+        conversation.id,
+        sender=TransferMessageSender.DESKTOP,
+        text="第二条",
+    )
+    appended_note = service.get_record(note.id)
+
+    assert "第一条" in appended_note.note
+    assert "第二条" in appended_note.note
+    assert appended_note.note.count("\n\n") >= 1
+
+    service.close_transfer_conversation(conversation.id)
+    closed = service.get_transfer_conversation(conversation.id)
+
+    assert closed.note_sync_active is False
+
+
+def test_exported_session_note_stays_bound_after_conversation_closes(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    service.unlock("master password")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    service.add_transfer_text_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        text="第一条",
+    )
+    note = service.export_transfer_conversation_to_note(conversation.id)
+
+    service.close_transfer_conversation(conversation.id)
+    closed = service.get_transfer_conversation(conversation.id)
+
+    assert closed.note_id == note.id
+    assert closed.note_sync_active is False
+    assert closed.status == TransferConversationStatus.TRANSFERRED

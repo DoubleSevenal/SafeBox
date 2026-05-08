@@ -421,8 +421,15 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         back = QPushButton("返回列表")
         back.setObjectName("SubtleButton")
+        self.transfer_organize_button = QPushButton("整理")
+        self.transfer_organize_button.setObjectName("SubtleButton")
+        self.transfer_organize_menu = QMenu(self)
+        export_note_action = self.transfer_organize_menu.addAction("转存为小纸条")
+        close_chat_action = self.transfer_organize_menu.addAction("关闭此次对话")
+        self.transfer_organize_button.setMenu(self.transfer_organize_menu)
         self.transfer_close_button = QPushButton("关闭此次对话")
         self.transfer_close_button.setObjectName("SubtleButton")
+        self.transfer_close_button.setVisible(False)
         self.transfer_chat_title = QLabel("手机对话")
         self.transfer_chat_title.setObjectName("HeroTitle")
         self.transfer_chat_meta = QLabel("")
@@ -447,6 +454,7 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self.transfer_send_button)
         top.addWidget(back)
         top.addStretch()
+        top.addWidget(self.transfer_organize_button)
         top.addWidget(self.transfer_close_button)
         layout.addLayout(top)
         layout.addWidget(hero)
@@ -454,6 +462,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(input_row)
 
         back.clicked.connect(self._show_transfer_list_page)
+        export_note_action.triggered.connect(self._export_current_transfer_to_note)
+        close_chat_action.triggered.connect(self._close_current_transfer_chat)
         self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
         self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
         return page
@@ -1118,9 +1128,7 @@ class MainWindow(QMainWindow):
         self.current_transfer_id = conversation_id
         conversation = self.service.get_transfer_conversation(conversation_id)
         self.transfer_chat_title.setText(conversation.title)
-        self.transfer_chat_meta.setText(
-            f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)}"
-        )
+        self.transfer_chat_meta.setText(self._transfer_chat_meta(conversation.id))
         self.transfer_messages_view.setPlainText(self._format_transfer_messages(conversation_id))
         self._remember_module_page("transfer", self.transfer_chat_page)
         self._set_nav("transfer")
@@ -1142,12 +1150,26 @@ class MainWindow(QMainWindow):
         self.service.close_transfer_conversation(self.current_transfer_id)
         self._show_transfer_list_page()
 
+    def _export_current_transfer_to_note(self) -> None:
+        if not self.current_transfer_id:
+            return
+        self.service.export_transfer_conversation_to_note(self.current_transfer_id)
+        self.transfer_chat_meta.setText(self._transfer_chat_meta(self.current_transfer_id))
+        self._refresh_notes()
+
     def _format_transfer_messages(self, conversation_id: str) -> str:
         lines: list[str] = []
         for message in self.service.list_transfer_messages(conversation_id):
             sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
             lines.append(f"{sender} {message.created_at}\n{message.text}")
         return "\n\n".join(lines)
+
+    def _transfer_chat_meta(self, conversation_id: str) -> str:
+        conversation = self.service.get_transfer_conversation(conversation_id)
+        meta = f"{conversation.device_name} · {_transfer_status_label(conversation.status.value)}"
+        if conversation.note_id:
+            meta = f"{meta} · 已转存为小纸条"
+        return meta
 
     def _update_data_status(
         self,
