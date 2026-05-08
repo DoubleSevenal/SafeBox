@@ -557,10 +557,11 @@ class VaultService:
         blocks: list[str] = []
         for message in messages:
             sender = "电脑" if message.sender == TransferMessageSender.DESKTOP else "手机"
+            edited_label = " · 已编辑" if message.edited_at else ""
             content = message.text
             if message.kind in {TransferMessageKind.IMAGE, TransferMessageKind.FILE}:
                 content = self._attachment_placeholder(message)
-            blocks.append(f"{sender} {message.created_at}\n{content}")
+            blocks.append(f"{sender} {message.created_at}{edited_label}\n{content}")
         return "\n\n".join(blocks)
 
     def _attachment_placeholder(self, message: TransferMessage) -> str:

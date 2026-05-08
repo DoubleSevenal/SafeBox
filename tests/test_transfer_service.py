@@ -629,6 +629,7 @@ def test_exported_session_note_updates_when_message_is_edited(vault_path) -> Non
     updated_note = service.get_record(note.id)
 
     assert "新内容" in updated_note.note
+    assert "已编辑" in updated_note.note
     assert "旧内容" not in updated_note.note
     assert updated_note.category == "会话"
 
