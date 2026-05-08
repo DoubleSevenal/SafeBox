@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 
 from safebox.core.services import VaultService
@@ -23,6 +24,17 @@ class FakeVaultOpenDialog:
 
     def values(self) -> tuple[str, str, str, str]:
         return ("于祥磊", "wojiao321.", "", "open")
+
+
+def _pair_transfer_phone(window: MainWindow) -> None:
+    window.connect_phone_button.click()
+    assert window.transfer_server is not None
+    with urlopen(
+        f"{window.transfer_server.url}/?token={window.transfer_server.connection_token}",
+        timeout=5,
+    ):
+        pass
+    window._check_transfer_pairing()
 
 
 def test_open_existing_vault_refreshes_account_and_note_lists(
@@ -331,7 +343,7 @@ def test_transfer_detail_back_resets_transfer_module_to_list(
     window.close()
 
 
-def test_connect_phone_starts_current_transfer_chat(
+def test_connect_phone_waits_for_phone_before_creating_chat(
     vault_path: Path,
     monkeypatch,
     qt_app,
@@ -350,16 +362,28 @@ def test_connect_phone_starts_current_transfer_chat(
 
     window.connect_phone_button.click()
 
+    assert window.transfer_server is not None
+    assert window.pages.currentWidget() == window.transfer_connect_page
+    assert window.current_transfer_id == ""
+    assert window.transfer_list.count() == 1
+    assert window.transfer_list.item(0).flags() == Qt.ItemFlag.NoItemFlags
+    assert window.service.list_transfer_conversations() == []
+    assert window.transfer_server.url.startswith("http://")
+    assert window.transfer_server.display_url in window.transfer_connect_url_value.text()
+    assert "等待手机打开链接" in window.transfer_connect_code_value.text()
+
+    with urlopen(
+        f"{window.transfer_server.url}/?token={window.transfer_server.connection_token}",
+        timeout=5,
+    ):
+        pass
+    window._check_transfer_pairing()
+
     assert window.pages.currentWidget() == window.transfer_chat_page
     assert window.current_transfer_id
     assert window.transfer_chat_title.text() == "手机对话"
     assert window.transfer_messages_view.toPlainText() == ""
-    assert window.transfer_server is not None
-    assert window.transfer_server.url.startswith("http://")
-    assert window.transfer_server.display_url in window.transfer_status.text()
-    assert window.transfer_server.verification_code in window.transfer_status.text()
-    assert window.transfer_server.display_url in window.transfer_chat_connection.text()
-    assert window.transfer_server.verification_code in window.transfer_chat_connection.text()
+    assert window.transfer_server.conversation_id == window.current_transfer_id
 
     window.transfer_server.stop()
     window.close()
@@ -381,7 +405,7 @@ def test_transfer_chat_sends_text_and_closes_to_history(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
 
     window.transfer_message_input.setPlainText("电脑发来的资料说明")
     window.transfer_send_button.click()
@@ -399,13 +423,13 @@ def test_transfer_chat_sends_text_and_closes_to_history(
     assert window.transfer_list.count() == 1
 
     window._open_transfer_item(window.transfer_list.item(0))
-    assert "电脑发来的资料说明" in window.transfer_detail_body.toPlainText()
+    assert "电脑发来的资料说明" in window.transfer_detail_messages_view.toPlainText()
     assert "只读查看" in window.transfer_detail_notice.text()
 
     window.close()
 
 
-def test_transfer_chat_edits_last_text_message(
+def test_transfer_chat_does_not_expose_message_editing(
     vault_path: Path,
     monkeypatch,
     qt_app,
@@ -421,77 +445,19 @@ def test_transfer_chat_edits_last_text_message(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
     window.transfer_message_input.setPlainText("旧内容")
     window.transfer_send_button.click()
-    window.transfer_message_input.setPlainText("新内容")
-    monkeypatch.setattr(
-        main_window.QInputDialog,
-        "getItem",
-        lambda *args, **kwargs: ("电脑 旧内容", True),
-    )
-
-    window.transfer_edit_last_button.click()
 
     messages = window.service.list_transfer_messages(window.current_transfer_id)
 
     assert len(messages) == 1
-    assert messages[0].text == "新内容"
-    assert messages[0].edited_at
-    assert "已编辑" in window.transfer_messages_view.toPlainText()
-    assert "新内容" in window.transfer_messages_view.toPlainText()
-    assert "旧内容" not in window.transfer_messages_view.toPlainText()
-    assert window.transfer_message_input.toPlainText() == ""
-
-    window.transfer_server.stop()
-    window.close()
-
-
-def test_transfer_chat_edits_selected_text_message(
-    vault_path: Path,
-    monkeypatch,
-    qt_app,
-) -> None:
-    base_dir = vault_path.with_suffix("") / "SafeBoxData"
-    vault_path = vault_path_for_name(base_dir, "于祥磊")
-    service = VaultService(vault_path)
-    service.initialize("wojiao321.")
-    service.lock()
-
-    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
-    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
-    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
-    window._open_vault()
-    window._show_transfer_page()
-    window.connect_phone_button.click()
-    first = window.service.add_transfer_text_message(
-        window.current_transfer_id,
-        sender=TransferMessageSender.DESKTOP,
-        text="第一条",
-    )
-    second = window.service.add_transfer_text_message(
-        window.current_transfer_id,
-        sender=TransferMessageSender.PHONE,
-        text="第二条旧内容",
-    )
-    window._show_transfer_chat(window.current_transfer_id)
-    window.transfer_message_input.setPlainText("第二条新内容")
-
-    monkeypatch.setattr(
-        main_window.QInputDialog,
-        "getItem",
-        lambda *args, **kwargs: ("手机 第二条旧内容", True),
-    )
-
-    window.transfer_edit_last_button.click()
-
-    messages = window.service.list_transfer_messages(window.current_transfer_id)
-
-    assert messages[0].id == first.id
-    assert messages[0].text == "第一条"
-    assert messages[1].id == second.id
-    assert messages[1].text == "第二条新内容"
-    assert "第二条新内容" in window.transfer_messages_view.toPlainText()
+    assert messages[0].text == "旧内容"
+    assert not hasattr(window, "transfer_edit_last_button")
+    assert "编辑消息" not in [
+        window.transfer_send_button.text(),
+        window.transfer_send_file_button.text(),
+    ]
 
     window.transfer_server.stop()
     window.close()
@@ -513,16 +479,7 @@ def test_transfer_server_phone_message_appears_in_current_chat(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
-
-    pair_request = Request(
-        f"{window.transfer_server.url}/api/pair",
-        data=json.dumps({"code": window.transfer_server.verification_code}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(pair_request, timeout=5):
-        pass
+    _pair_transfer_phone(window)
 
     request = Request(
         f"{window.transfer_server.url}/api/messages",
@@ -558,7 +515,7 @@ def test_active_transfer_chat_refreshes_phone_message_without_reopening(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
 
     window.service.add_transfer_text_message(
         window.current_transfer_id,
@@ -593,14 +550,15 @@ def test_active_transfer_chat_returns_to_list_when_phone_closes(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
 
     window.service.close_transfer_conversation(window.current_transfer_id)
 
     window._refresh_active_transfer_chat()
 
-    assert window.pages.currentWidget() == window.transfer_page
+    assert window.pages.currentWidget() == window.transfer_chat_page
     assert not window.transfer_refresh_timer.isActive()
+    window._show_transfer_list_page()
     assert window.transfer_list.count() == 1
     conversation = window.service.get_transfer_conversation(window.current_transfer_id)
     assert conversation.status.value == "closed"
@@ -625,14 +583,14 @@ def test_transfer_chat_disables_input_for_closed_conversation(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
 
     window.service.close_transfer_conversation(window.current_transfer_id)
     window._show_transfer_chat(window.current_transfer_id)
 
     assert not window.transfer_message_input.isEnabled()
     assert not window.transfer_send_button.isEnabled()
-    assert not window.transfer_edit_last_button.isEnabled()
+    assert not hasattr(window, "transfer_edit_last_button")
 
     window.transfer_server.stop()
     window.close()
@@ -655,7 +613,7 @@ def test_active_transfer_chat_refreshes_attachment_summary(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
     window.service.add_transfer_attachment_message(
         window.current_transfer_id,
         sender=TransferMessageSender.PHONE,
@@ -695,7 +653,7 @@ def test_transfer_refresh_timer_runs_only_on_active_chat(
 
     assert not window.transfer_refresh_timer.isActive()
 
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
     assert window.transfer_refresh_timer.isActive()
 
     window._show_transfer_list_page()
@@ -722,7 +680,7 @@ def test_sidebar_navigation_preserves_active_transfer_chat(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
 
     window.transfer_message_input.setPlainText("保留这次对话")
     window.transfer_send_button.click()
@@ -752,7 +710,7 @@ def test_transfer_chat_exports_session_note_from_organize_menu(
     window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
     window._open_vault()
     window._show_transfer_page()
-    window.connect_phone_button.click()
+    _pair_transfer_phone(window)
     window.transfer_message_input.setPlainText("发票图片稍后发你")
     window.transfer_send_button.click()
 

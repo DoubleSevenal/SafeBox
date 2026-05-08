@@ -100,6 +100,10 @@ def _upload_error_code(url: str, filename: str, content: bytes, mime_type: str) 
     return 200
 
 
+def _pair_server(server: TransferHttpServer) -> None:
+    _request_json(f"{server.url}/api/pair", {"token": server.connection_token})
+
+
 def _multipart_file(filename: str, content: bytes, mime_type: str) -> tuple[bytes, str]:
     boundary = "----safebox-test-boundary"
     body = b"\r\n".join(
@@ -136,16 +140,49 @@ def test_transfer_server_serves_mobile_page_and_session(vault_path) -> None:
     assert "传输助手" in html
     assert "发送" in html
     assert "选择文件" in html
-    assert "上传附件" in html
-    assert "验证码" in html
-    assert "验证" in html
+    assert "正在连接电脑" in html
     assert "initSession()" in html
     assert "refreshAfterWrite()" in html
-    assert "editMessage(" in html
     assert "setWritable(" in html
-    assert session["conversation_id"] == server.conversation_id
+    assert "height: 100dvh" in html
+    assert "overflow-y: auto" in html
+    assert "class=\"message-panel\"" in html
+    assert "readonly compact hidden" in html
+    assert "footer.hidden = !writable" in html
+    assert "position: fixed" not in html
+    assert session["conversation_id"] == ""
     assert session["device_name"] == "手机浏览器"
     assert session["paired"] is False
+    assert session["status"] == "waiting"
+    assert service.list_transfer_conversations() == []
+
+
+def test_transfer_server_creates_conversation_only_after_token_pairing(vault_path) -> None:
+    service = VaultService(vault_path)
+    service.initialize("master password")
+    server = _test_server(service, verification_code="123456")
+
+    server.start()
+    try:
+        assert server.conversation_id == ""
+        assert service.list_transfer_conversations() == []
+
+        with urlopen(
+            f"{server.url}/?token={server.connection_token}",
+            timeout=5,
+        ):
+            pass
+        with urlopen(f"{server.url}/api/session", timeout=5) as response:
+            session = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.stop()
+
+    conversations = service.list_transfer_conversations()
+
+    assert len(conversations) == 1
+    assert session["conversation_id"] == conversations[0].id
+    assert server.conversation_id == conversations[0].id
+    assert session["paired"] is True
     assert session["status"] == "active"
 
 
@@ -171,7 +208,7 @@ def test_transfer_server_display_url_falls_back_to_local_url(vault_path) -> None
 
     server.start()
     try:
-        assert server.display_url == server.url
+        assert server.display_url.startswith(f"{server.url}/?token=")
     finally:
         server.stop()
 
@@ -199,7 +236,7 @@ def test_transfer_server_accepts_phone_text_message(vault_path) -> None:
 
     server.start()
     try:
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _request_json(f"{server.url}/api/pair", {"token": server.connection_token})
         result = _request_json(f"{server.url}/api/messages", {"text": "手机发来的文字"})
     finally:
         server.stop()
@@ -223,20 +260,21 @@ def test_transfer_server_rejects_message_before_pairing(vault_path) -> None:
         server.stop()
 
     assert status == 403
-    assert service.list_transfer_messages(server.conversation_id) == []
+    assert server.conversation_id == ""
+    assert service.list_transfer_conversations() == []
 
 
-def test_transfer_server_pairs_with_verification_code(vault_path) -> None:
+def test_transfer_server_pairs_with_connection_token(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
     server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
-        wrong_status = _request_error_code(f"{server.url}/api/pair", {"code": "000000"})
+        wrong_status = _request_error_code(f"{server.url}/api/pair", {"token": "wrong"})
         with urlopen(f"{server.url}/api/session", timeout=5) as response:
             unpaired_session = json.loads(response.read().decode("utf-8"))
-        result = _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        result = _request_json(f"{server.url}/api/pair", {"token": server.connection_token})
         with urlopen(f"{server.url}/api/session", timeout=5) as response:
             paired_session = json.loads(response.read().decode("utf-8"))
     finally:
@@ -244,8 +282,10 @@ def test_transfer_server_pairs_with_verification_code(vault_path) -> None:
 
     assert wrong_status == 403
     assert unpaired_session["paired"] is False
+    assert unpaired_session["conversation_id"] == ""
     assert result == {"ok": True, "paired": True}
     assert paired_session["paired"] is True
+    assert paired_session["conversation_id"] == server.conversation_id
 
 
 def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
@@ -255,12 +295,12 @@ def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
 
     server.start()
     try:
+        _pair_server(server)
         desktop_message = service.add_transfer_text_message(
             server.conversation_id,
             sender=TransferMessageSender.DESKTOP,
             text="电脑发来的消息",
         )
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
         with urlopen(f"{server.url}/api/messages", timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
     finally:
@@ -275,6 +315,8 @@ def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
             "text": "电脑发来的消息",
             "attachment_id": "",
             "filename": "",
+            "mime_type": "",
+            "size_bytes": 0,
             "created_at": desktop_message.created_at,
             "updated_at": desktop_message.updated_at,
             "edited_at": "",
@@ -282,42 +324,14 @@ def test_transfer_server_lists_messages_for_paired_phone(vault_path) -> None:
     ]
 
 
-def test_transfer_server_edits_text_message_for_paired_phone(vault_path) -> None:
+def test_transfer_server_rejects_text_message_patch(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
     server = _test_server(service, verification_code="123456")
 
     server.start()
     try:
-        message = service.add_transfer_text_message(
-            server.conversation_id,
-            sender=TransferMessageSender.PHONE,
-            text="旧内容",
-        )
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
-        result = _request_json_method(
-            f"{server.url}/api/messages/{message.id}",
-            {"text": "新内容"},
-            "PATCH",
-        )
-    finally:
-        server.stop()
-
-    messages = service.list_transfer_messages(server.conversation_id)
-
-    assert result["ok"] is True
-    assert result["message_id"] == message.id
-    assert messages[0].text == "新内容"
-    assert messages[0].edited_at
-
-
-def test_transfer_server_rejects_text_edit_before_pairing(vault_path) -> None:
-    service = VaultService(vault_path)
-    service.initialize("master password")
-    server = _test_server(service, verification_code="123456")
-
-    server.start()
-    try:
+        _pair_server(server)
         message = service.add_transfer_text_message(
             server.conversation_id,
             sender=TransferMessageSender.PHONE,
@@ -333,8 +347,9 @@ def test_transfer_server_rejects_text_edit_before_pairing(vault_path) -> None:
 
     messages = service.list_transfer_messages(server.conversation_id)
 
-    assert status == 403
+    assert status == 501
     assert messages[0].text == "旧内容"
+    assert not messages[0].edited_at
 
 
 def test_transfer_server_rejects_message_list_before_pairing(vault_path) -> None:
@@ -363,7 +378,7 @@ def test_transfer_server_closes_conversation_from_paired_phone(vault_path) -> No
 
     server.start()
     try:
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _pair_server(server)
         result = _request_json(f"{server.url}/api/close", {})
         with urlopen(f"{server.url}/api/session", timeout=5) as response:
             session = json.loads(response.read().decode("utf-8"))
@@ -376,7 +391,9 @@ def test_transfer_server_closes_conversation_from_paired_phone(vault_path) -> No
 
     conversation = service.get_transfer_conversation(server.conversation_id)
 
-    assert result == {"ok": True, "status": "closed"}
+    assert result["ok"] is True
+    assert result["status"] == "closed"
+    assert result["closed_at"]
     assert session["status"] == "closed"
     assert conversation.status.value == "closed"
     assert conversation.closed_at
@@ -395,10 +412,9 @@ def test_transfer_server_rejects_close_before_pairing(vault_path) -> None:
     finally:
         server.stop()
 
-    conversation = service.get_transfer_conversation(server.conversation_id)
-
     assert status == 403
-    assert conversation.status.value == "active"
+    assert server.conversation_id == ""
+    assert service.list_transfer_conversations() == []
 
 
 def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
@@ -408,7 +424,7 @@ def test_transfer_server_rejects_empty_text_message(vault_path) -> None:
 
     server.start()
     try:
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _pair_server(server)
         status = _request_error_code(f"{server.url}/api/messages", {"text": "   "})
     finally:
         server.stop()
@@ -423,7 +439,7 @@ def test_transfer_server_accepts_file_upload(vault_path) -> None:
 
     server.start()
     try:
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _pair_server(server)
         result = _upload_file(
             f"{server.url}/api/uploads",
             "invoice.pdf",
@@ -464,8 +480,8 @@ def test_transfer_server_rejects_upload_before_pairing(vault_path) -> None:
         server.stop()
 
     assert status == 403
-    assert service.list_transfer_messages(server.conversation_id) == []
-    assert service.list_transfer_attachments(server.conversation_id) == []
+    assert server.conversation_id == ""
+    assert service.list_transfer_conversations() == []
 
 
 def test_transfer_server_rejects_upload_after_close_without_saving_file(vault_path) -> None:
@@ -475,7 +491,7 @@ def test_transfer_server_rejects_upload_after_close_without_saving_file(vault_pa
 
     server.start()
     try:
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _pair_server(server)
         _request_json(f"{server.url}/api/close", {})
         status = _upload_error_code(
             f"{server.url}/api/uploads",
@@ -500,7 +516,7 @@ def test_transfer_server_treats_uploaded_image_as_image_message(vault_path) -> N
 
     server.start()
     try:
-        _request_json(f"{server.url}/api/pair", {"code": "123456"})
+        _pair_server(server)
         _upload_file(
             f"{server.url}/api/uploads",
             "invoice.png",

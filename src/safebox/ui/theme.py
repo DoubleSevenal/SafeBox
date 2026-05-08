@@ -79,6 +79,15 @@ QLabel#ToastNotice {
     font-size: 15px;
     font-weight: 750;
 }
+QLabel#TransferConnectStatus {
+    color: #475569;
+    background: #ffffff;
+    border: 1px solid #dbe5f3;
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 650;
+}
 QLabel#DataStatus {
     color: #475569;
     background: #ffffff;
@@ -144,6 +153,12 @@ QFrame#SettingsRow {
     border: 1px solid #edf2f7;
     border-radius: 12px;
 }
+QFrame#TransferConnectInfoRow {
+    background: #f8fbff;
+    border: 1px solid #edf2f7;
+    border-radius: 12px;
+    min-height: 92px;
+}
 QFrame#AttachmentCard {
     background: #ffffff;
     border: 1px solid #dbe5f3;
@@ -197,6 +212,13 @@ QLabel#SettingsLabel {
     font-size: 13px;
     font-weight: 700;
     min-width: 80px;
+}
+QLabel#TransferConnectInfoLabel {
+    color: #475569;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 750;
+    min-width: 104px;
 }
 QLabel#SettingsValue {
     color: #172033;

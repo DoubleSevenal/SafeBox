@@ -166,93 +166,6 @@ def test_service_rejects_empty_transfer_text_message(vault_path) -> None:
         )
 
 
-def test_service_edits_transfer_text_message(vault_path) -> None:
-    service = VaultService(vault_path)
-    service.initialize("master password")
-    service.unlock("master password")
-    conversation = service.create_transfer_conversation(
-        title="报销资料",
-        device_name="安卓手机",
-    )
-    message = service.add_transfer_text_message(
-        conversation.id,
-        sender=TransferMessageSender.DESKTOP,
-        text="旧内容",
-    )
-
-    edited = service.edit_transfer_text_message(
-        conversation.id,
-        message.id,
-        text="新内容",
-    )
-    messages = service.list_transfer_messages(conversation.id)
-    updated = service.get_transfer_conversation(conversation.id)
-
-    assert edited.id == message.id
-    assert edited.text == "新内容"
-    assert edited.edited_at
-    assert edited.updated_at == edited.edited_at
-    assert messages[0].text == "新内容"
-    assert updated.message_count == 1
-    assert updated.updated_at == edited.updated_at
-
-
-def test_service_rejects_empty_transfer_text_edit(vault_path) -> None:
-    service = VaultService(vault_path)
-    service.initialize("master password")
-    service.unlock("master password")
-    conversation = service.create_transfer_conversation(
-        title="报销资料",
-        device_name="安卓手机",
-    )
-    message = service.add_transfer_text_message(
-        conversation.id,
-        sender=TransferMessageSender.DESKTOP,
-        text="旧内容",
-    )
-
-    with pytest.raises(ValueError, match="Message text is required"):
-        service.edit_transfer_text_message(conversation.id, message.id, text="   ")
-
-
-def test_service_rejects_attachment_message_edit(vault_path) -> None:
-    service = VaultService(vault_path)
-    service.initialize("master password")
-    service.unlock("master password")
-    conversation = service.create_transfer_conversation(
-        title="报销资料",
-        device_name="安卓手机",
-    )
-    message, _ = service.add_transfer_attachment_message(
-        conversation.id,
-        sender=TransferMessageSender.PHONE,
-        kind=TransferMessageKind.FILE,
-        filename="invoice.pdf",
-    )
-
-    with pytest.raises(ValueError, match="Only text messages can be edited"):
-        service.edit_transfer_text_message(conversation.id, message.id, text="新内容")
-
-
-def test_service_rejects_transfer_text_edit_after_close(vault_path) -> None:
-    service = VaultService(vault_path)
-    service.initialize("master password")
-    service.unlock("master password")
-    conversation = service.create_transfer_conversation(
-        title="报销资料",
-        device_name="安卓手机",
-    )
-    message = service.add_transfer_text_message(
-        conversation.id,
-        sender=TransferMessageSender.DESKTOP,
-        text="旧内容",
-    )
-    service.close_transfer_conversation(conversation.id)
-
-    with pytest.raises(ValueError, match="Transfer conversation is closed"):
-        service.edit_transfer_text_message(conversation.id, message.id, text="新内容")
-
-
 def test_service_rejects_messages_after_transfer_conversation_closes(vault_path) -> None:
     service = VaultService(vault_path)
     service.initialize("master password")
@@ -607,31 +520,6 @@ def test_exported_session_note_keeps_appending_until_conversation_closes(
     closed = service.get_transfer_conversation(conversation.id)
 
     assert closed.note_sync_active is False
-
-
-def test_exported_session_note_updates_when_message_is_edited(vault_path) -> None:
-    service = VaultService(vault_path)
-    service.initialize("master password")
-    service.unlock("master password")
-    conversation = service.create_transfer_conversation(
-        title="手机对话",
-        device_name="安卓手机",
-    )
-    message = service.add_transfer_text_message(
-        conversation.id,
-        sender=TransferMessageSender.DESKTOP,
-        text="旧内容",
-    )
-    note = service.export_transfer_conversation_to_note(conversation.id)
-
-    service.edit_transfer_text_message(conversation.id, message.id, text="新内容")
-
-    updated_note = service.get_record(note.id)
-
-    assert "新内容" in updated_note.note
-    assert "已编辑" in updated_note.note
-    assert "旧内容" not in updated_note.note
-    assert updated_note.category == "会话"
 
 
 def test_exported_session_note_stays_bound_after_conversation_closes(vault_path) -> None:

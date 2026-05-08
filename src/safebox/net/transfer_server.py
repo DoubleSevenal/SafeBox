@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from safebox.core.services import VaultService
 from safebox.core.transfer import (
@@ -43,7 +43,13 @@ MOBILE_PAGE = """<!doctype html>
       background: #e9edf3;
       color: #182033;
     }
-    main { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+    main {
+      height: 100dvh;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
     header {
       position: sticky;
       top: 0;
@@ -61,12 +67,21 @@ MOBILE_PAGE = """<!doctype html>
       color: #64748b;
       white-space: nowrap;
     }
+    .message-panel {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      display: flex;
+      flex-direction: column;
+    }
     .messages {
-      padding: 16px 12px 120px;
+      flex: 1;
+      min-height: min-content;
+      padding: 12px 12px 18px;
       display: flex;
       flex-direction: column;
       gap: 10px;
-      overflow: auto;
     }
     .message-row { display: flex; }
     .message-row.desktop { justify-content: flex-start; }
@@ -106,15 +121,13 @@ MOBILE_PAGE = """<!doctype html>
     .file-name { font-weight: 700; margin-bottom: 4px; }
     .file-meta { color: #617086; font-size: 12px; }
     footer {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
       background: #f7f8fb;
       border-top: 1px solid #d8dee9;
       padding: 10px 12px 12px;
       display: grid;
       gap: 8px;
+      max-height: 34dvh;
+      overflow-y: auto;
     }
     .compose { display: flex; gap: 8px; align-items: flex-end; }
     textarea {
@@ -149,12 +162,18 @@ MOBILE_PAGE = """<!doctype html>
     }
     .hidden { display: none; }
     .readonly {
-      margin: 12px;
-      padding: 12px;
-      border-radius: 12px;
+      margin: 8px 12px 0;
+      padding: 7px 10px;
+      border-radius: 8px;
       background: #fff7ed;
       color: #9a3412;
       border: 1px solid #fed7aa;
+      font-size: 13px;
+      line-height: 1.35;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      box-shadow: 0 2px 8px rgba(154, 52, 18, .08);
     }
     input[type="text"] {
       width: 160px;
@@ -175,6 +194,7 @@ MOBILE_PAGE = """<!doctype html>
     }
     .file-label.disabled { opacity: .55; pointer-events: none; }
     .file-label input { display: none; }
+    .compact { max-width: calc(100% - 24px); }
     #status { color: #475569; font-size: 13px; min-height: 18px; }
   </style>
 </head>
@@ -182,18 +202,19 @@ MOBILE_PAGE = """<!doctype html>
   <main>
     <header>
       <h1>传输助手</h1>
-      <div id="sessionState" class="session-state">待验证</div>
+      <div id="sessionState" class="session-state">连接中</div>
       <button class="danger" onclick="closeConversation()">结束</button>
     </header>
-    <div id="pairBox" class="pair">
-      <input id="code" type="text" inputmode="numeric" placeholder="验证码">
-      <button onclick="pairDevice()">验证</button>
+    <div class="message-panel">
+      <div id="pairBox" class="pair hidden">
+        正在连接电脑，连接成功后即可直接互发文字、图片和文件。
+      </div>
+      <div id="readonlyNotice" class="readonly compact hidden">
+        此次对话已结束，可上下滑动查看历史消息和下载附件。
+      </div>
+      <div id="messages" class="messages"></div>
     </div>
-    <div id="readonlyNotice" class="readonly hidden">
-      此次对话已结束，只能查看历史消息和下载附件。
-    </div>
-    <div id="messages" class="messages"></div>
-    <footer>
+    <footer id="composer">
       <div class="compose">
         <textarea id="text" placeholder="输入要发送到电脑的文字"></textarea>
         <button onclick="sendText()">发送</button>
@@ -220,26 +241,29 @@ MOBILE_PAGE = """<!doctype html>
     function setWritable(writable) {
       document.getElementById('text').disabled = !writable;
       document.getElementById('file').disabled = !writable;
+      const footer = document.getElementById('composer');
+      footer.hidden = !writable;
       document.querySelector('.file-label').className = writable
         ? 'file-label'
         : 'file-label disabled';
-      for (const button of document.querySelectorAll('button')) {
-        if (button.textContent !== '验证') button.disabled = !writable;
+      for (const button of footer.querySelectorAll('button')) {
+        button.disabled = !writable;
       }
+      document.querySelector('button.danger').disabled = !paired;
     }
 
     function setSessionState(session) {
       const state = document.getElementById('sessionState');
       const closed = session.status === 'closed' || session.closed_at;
-      state.textContent = closed ? '已结束' : (session.paired ? '已连接' : '待验证');
+      state.textContent = closed ? '已结束' : (session.paired ? '已连接' : '连接中');
       document.getElementById('readonlyNotice').className = closed ? 'readonly' : 'readonly hidden';
     }
 
     function statusText(payload, fallback) {
       if (!payload || !payload.error) return fallback;
       const errors = {
-        pair_required: '请先输入验证码',
-        invalid_code: '验证码错误',
+        pair_required: '连接链接已失效，请回到电脑重新复制连接',
+        invalid_token: '连接链接已失效，请回到电脑重新复制连接',
         text_required: '请输入内容',
         multipart_required: '上传格式不正确',
         file_required: '请选择文件',
@@ -259,24 +283,6 @@ MOBILE_PAGE = """<!doctype html>
       if (!wasPaired && paired) loadMessages(true);
     }
 
-    async function pairDevice() {
-      const code = document.getElementById('code').value;
-      const response = await fetch('/api/pair', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({code})
-      });
-      const payload = await response.json().catch(() => ({}));
-      document.getElementById('status').textContent = response.ok
-        ? '验证成功'
-        : statusText(payload, '验证码错误');
-      if (response.ok) {
-        setPaired(true);
-        setWritable(true);
-        initSession();
-        loadMessages(true);
-      }
-    }
     function refreshAfterWrite() {
       loadMessages(true);
       initSession();
@@ -355,8 +361,7 @@ MOBILE_PAGE = """<!doctype html>
         bubble.className = 'bubble';
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = (item.sender === 'desktop' ? '电脑' : '手机') +
-          (item.edited_at ? ' · 已编辑' : '');
+        meta.textContent = item.sender === 'desktop' ? '电脑' : '手机';
         bubble.appendChild(meta);
         if (item.kind === 'text') {
           const body = document.createElement('div');
@@ -424,13 +429,15 @@ class TransferHttpServer:
         device_name: str = "手机浏览器",
         lan_ip_provider=lan_ip_address,
         verification_code: str = "",
+        connection_token: str = "",
     ) -> None:
         self.service = service
         self.host = host
         self.port = port
         self.device_name = device_name
         self.lan_ip_provider = lan_ip_provider
-        self.verification_code = verification_code or f"{secrets.randbelow(1_000_000):06d}"
+        self.connection_token = connection_token or verification_code or secrets.token_urlsafe(24)
+        self.verification_code = self.connection_token
         self.paired = False
         self.conversation_id = ""
         self.upload_dir = service.store.path.parent / "attachments"
@@ -452,22 +459,30 @@ class TransferHttpServer:
             return ""
         lan_ip = self.lan_ip_provider()
         if not lan_ip:
-            return self.url
+            return self._with_connection_token(self.url)
         _, port = self._server.server_address
-        return f"http://{lan_ip}:{port}"
+        return self._with_connection_token(f"http://{lan_ip}:{port}")
+
+    def _with_connection_token(self, base_url: str) -> str:
+        return f"{base_url}/?token={quote(self.connection_token)}"
 
     def start(self) -> None:
         if self._server is not None:
             return
+        handler = self._make_handler()
+        self._server = ThreadingHTTPServer((self.host, self.port), handler)
+        self._thread = Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def ensure_conversation(self):
+        if self.conversation_id:
+            return self.service.get_transfer_conversation(self.conversation_id)
         conversation = self.service.create_transfer_conversation(
             title="手机对话",
             device_name=self.device_name,
         )
         self.conversation_id = conversation.id
-        handler = self._make_handler()
-        self._server = ThreadingHTTPServer((self.host, self.port), handler)
-        self._thread = Thread(target=self._server.serve_forever, daemon=True)
-        self._thread.start()
+        return conversation
 
     def stop(self) -> None:
         if self._server is None:
@@ -484,12 +499,16 @@ class TransferHttpServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
-                if self.path == "/":
+                parsed = urlparse(self.path)
+                if parsed.path == "/":
+                    self._pair_from_query(parsed.query)
                     self._send_text(HTTPStatus.OK, MOBILE_PAGE, "text/html; charset=utf-8")
                     return
-                if self.path == "/api/session":
-                    conversation = owner.service.get_transfer_conversation(
-                        owner.conversation_id
+                if parsed.path == "/api/session":
+                    conversation = (
+                        owner.service.get_transfer_conversation(owner.conversation_id)
+                        if owner.conversation_id
+                        else None
                     )
                     self._send_json(
                         HTTPStatus.OK,
@@ -497,42 +516,55 @@ class TransferHttpServer:
                             "conversation_id": owner.conversation_id,
                             "device_name": owner.device_name,
                             "paired": owner.paired,
-                            "status": conversation.status.value,
-                            "closed_at": conversation.closed_at,
+                            "trusted": owner.paired,
+                            "status": conversation.status.value
+                            if conversation is not None
+                            else "waiting",
+                            "closed_at": conversation.closed_at
+                            if conversation is not None
+                            else "",
                         },
                     )
                     return
-                if self.path == "/api/messages":
+                if parsed.path == "/api/messages":
                     self._handle_messages_get()
                     return
-                attachment_id = _attachment_id_from_path(self.path)
+                attachment_id = _attachment_id_from_path(parsed.path)
                 if attachment_id:
                     self._handle_attachment_get(attachment_id)
                     return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self) -> None:
-                if self.path == "/api/pair":
+                parsed = urlparse(self.path)
+                if parsed.path == "/api/pair":
                     self._handle_pair_post()
                     return
-                if self.path == "/api/messages":
+                if parsed.path == "/api/messages":
                     self._handle_message_post()
                     return
-                if self.path == "/api/uploads":
+                if parsed.path == "/api/uploads":
                     self._handle_upload_post()
                     return
-                if self.path == "/api/close":
+                if parsed.path == "/api/close":
                     self._handle_close_post()
                     return
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
+            def _pair_from_query(self, query: str) -> None:
+                token = parse_qs(query).get("token", [""])[0]
+                if token and secrets.compare_digest(token, owner.connection_token):
+                    owner.paired = True
+                    owner.ensure_conversation()
+
             def _handle_pair_post(self) -> None:
                 payload = self._read_json()
-                code = str(payload.get("code", "")).strip()
-                if code != owner.verification_code:
-                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid_code"})
+                token = str(payload.get("token", "")).strip()
+                if not secrets.compare_digest(token, owner.connection_token):
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid_token"})
                     return
                 owner.paired = True
+                owner.ensure_conversation()
                 self._send_json(HTTPStatus.OK, {"ok": True, "paired": True})
 
             def _handle_messages_get(self) -> None:
