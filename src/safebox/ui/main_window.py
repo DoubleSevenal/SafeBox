@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from shutil import copy2
+from subprocess import Popen
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
@@ -931,6 +932,17 @@ class MainWindow(QMainWindow):
         self.download_history_list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
+        self.download_history_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.download_history_list.customContextMenuRequested.connect(
+            lambda position: self._show_download_history_context_menu(
+                self.download_history_list,
+                position,
+                self._refresh_download_history,
+                self.download_history_status,
+            )
+        )
         action_row = QHBoxLayout()
         open_record = QPushButton("打开选中文件")
         open_record.setObjectName("PrimaryButton")
@@ -1135,6 +1147,7 @@ class MainWindow(QMainWindow):
         title_box.addWidget(subtitle)
         clear = QPushButton("清空列表")
         clear.setObjectName("DangerButton")
+        clear.setMinimumWidth(98)
         close = QPushButton("关闭")
         close.setObjectName("SubtleButton")
         header.addLayout(title_box, 1)
@@ -1143,14 +1156,17 @@ class MainWindow(QMainWindow):
         list_widget = QListWidget()
         list_widget.setObjectName("RecordList")
         list_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         status = QLabel("")
         status.setObjectName("DataStatus")
         status.setWordWrap(True)
         actions = QHBoxLayout()
         open_record = QPushButton("打开文件")
         open_record.setObjectName("PrimaryButton")
+        open_record.setMinimumWidth(100)
         remove_record = QPushButton("清除记录")
         remove_record.setObjectName("SubtleButton")
+        remove_record.setMinimumWidth(100)
         actions.addStretch()
         actions.addWidget(open_record)
         actions.addWidget(remove_record)
@@ -1217,6 +1233,14 @@ class MainWindow(QMainWindow):
             self._refresh_download_history()
             refresh()
 
+        list_widget.customContextMenuRequested.connect(
+            lambda position: self._show_download_history_context_menu(
+                list_widget,
+                position,
+                refresh,
+                status,
+            )
+        )
         open_record.clicked.connect(open_selected)
         remove_record.clicked.connect(remove_selected)
         clear.clicked.connect(clear_all)
@@ -1928,6 +1952,7 @@ class MainWindow(QMainWindow):
         title_box.addWidget(subtitle)
         download_all = QPushButton("下载全部")
         download_all.setObjectName("PrimaryButton")
+        download_all.setMinimumWidth(100)
         close = QPushButton("关闭")
         close.setObjectName("SubtleButton")
         header.addLayout(title_box, 1)
@@ -1999,6 +2024,7 @@ class MainWindow(QMainWindow):
             )
             download = QPushButton("下载")
             download.setObjectName("PrimaryButton")
+            download.setMinimumWidth(74)
             download.clicked.connect(
                 lambda checked=False, item=attachment: self._download_dialog_attachment(
                     conversation_id,
@@ -2042,6 +2068,18 @@ class MainWindow(QMainWindow):
                 status.setText("文件不存在，可能已被移动或删除")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(source)))
+
+    def _reveal_local_path(self, path: str, status: QLabel | None = None) -> None:
+        source = Path(path)
+        target = source if source.exists() else source.parent
+        if not target.exists():
+            if status is not None:
+                status.setText("文件和所在文件夹都不存在")
+            return
+        if source.exists():
+            Popen(["explorer", "/select,", str(source)])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def _is_transfer_image_attachment(self, attachment) -> bool:
         if attachment.mime_type.startswith("image/"):
@@ -2187,6 +2225,42 @@ class MainWindow(QMainWindow):
         self._open_local_path(record.saved_path, status)
         if status.text():
             self.download_history_status.setText(status.text())
+
+    def _show_download_history_context_menu(
+        self,
+        list_widget: QListWidget,
+        position,
+        refresh,
+        status: QLabel,
+    ) -> None:
+        item = list_widget.itemAt(position)
+        if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
+            return
+        list_widget.setCurrentItem(item)
+        record = self._download_history_record_from_item(item)
+        if record is None:
+            status.setText("下载记录不存在")
+            return
+        menu = QMenu(list_widget)
+        open_file = menu.addAction("打开文件")
+        reveal_file = menu.addAction("在资源管理器中打开")
+        remove_record = menu.addAction("清除记录")
+        action = menu.exec(list_widget.viewport().mapToGlobal(position))
+        if action == open_file:
+            self._open_local_path(record.saved_path, status)
+        elif action == reveal_file:
+            self._reveal_local_path(record.saved_path, status)
+        elif action == remove_record:
+            self.service.delete_download_history_record(record.id)
+            self._refresh_download_history()
+            refresh()
+
+    def _download_history_record_from_item(self, item: QListWidgetItem):
+        record_id = item.data(Qt.ItemDataRole.UserRole)
+        return next(
+            (entry for entry in self.service.list_download_history() if entry.id == record_id),
+            None,
+        )
 
     def _clear_download_history(self) -> None:
         self.service.clear_download_history()
@@ -2860,8 +2934,12 @@ class TransferMessageList(QListWidget):
         message_id = item.data(Qt.ItemDataRole.UserRole)
         text = self._message_text_by_id.get(message_id, "").strip()
         if text:
-            QApplication.clipboard().setText(text)
-            self.noticeRequested.emit("已复制整条消息")
+            menu = QMenu(self)
+            copy_action = menu.addAction("复制整条消息")
+            action = menu.exec(self.viewport().mapToGlobal(position))
+            if action == copy_action:
+                QApplication.clipboard().setText(text)
+                self.noticeRequested.emit("已复制整条消息")
 
 
 class CopyableMessageLabel(QLabel):

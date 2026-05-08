@@ -303,7 +303,13 @@ QPushButton#PrimaryButton:pressed {
     padding-top: 1px;
 }
 QPushButton#PrimaryButton:focus {
+    color: white;
     border: 1px solid #0f172a;
+}
+QPushButton#PrimaryButton:disabled {
+    color: #e2e8f0;
+    background: #94a3b8;
+    border-color: #94a3b8;
 }
 QPushButton#NavButton, QPushButton#NavButtonActive {
     min-height: 42px;
@@ -357,6 +363,15 @@ QPushButton#DangerButton:pressed {
     background: #991b1b;
     border-color: #991b1b;
     padding-top: 1px;
+}
+QPushButton#DangerButton:focus {
+    color: white;
+    border: 1px solid #7f1d1d;
+}
+QPushButton#DangerButton:disabled {
+    color: #fee2e2;
+    background: #fca5a5;
+    border-color: #fca5a5;
 }
 QPushButton#FormatButton,
 QPushButton#FormatButtonWide {
