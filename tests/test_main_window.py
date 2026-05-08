@@ -607,6 +607,35 @@ def test_active_transfer_chat_returns_to_list_when_phone_closes(
     window.close()
 
 
+def test_transfer_chat_disables_input_for_closed_conversation(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+
+    window.service.close_transfer_conversation(window.current_transfer_id)
+    window._show_transfer_chat(window.current_transfer_id)
+
+    assert not window.transfer_message_input.isEnabled()
+    assert not window.transfer_send_button.isEnabled()
+    assert not window.transfer_edit_last_button.isEnabled()
+
+    window.transfer_server.stop()
+    window.close()
+
+
 def test_active_transfer_chat_refreshes_attachment_summary(
     vault_path: Path,
     monkeypatch,

@@ -1224,14 +1224,20 @@ class MainWindow(QMainWindow):
     def _show_transfer_chat(self, conversation_id: str) -> None:
         self.current_transfer_id = conversation_id
         conversation = self.service.get_transfer_conversation(conversation_id)
+        writable = conversation.status != TransferConversationStatus.CLOSED
         self.transfer_chat_title.setText(conversation.title)
         self.transfer_chat_meta.setText(self._transfer_chat_meta(conversation.id))
         self.transfer_messages_view.setPlainText(self._format_transfer_messages(conversation_id))
+        self.transfer_message_input.setEnabled(writable)
+        self.transfer_send_button.setEnabled(writable)
+        self.transfer_edit_last_button.setEnabled(writable)
         self._remember_module_page("transfer", self.transfer_chat_page)
         self._set_nav("transfer")
         self.pages.setCurrentWidget(self.transfer_chat_page)
-        if not self.transfer_refresh_timer.isActive():
+        if writable and not self.transfer_refresh_timer.isActive():
             self.transfer_refresh_timer.start()
+        if not writable:
+            self.transfer_refresh_timer.stop()
 
     def _refresh_active_transfer_chat(self) -> None:
         if (
@@ -1242,7 +1248,7 @@ class MainWindow(QMainWindow):
             return
         try:
             conversation = self.service.get_transfer_conversation(self.current_transfer_id)
-            if conversation.status != TransferConversationStatus.ACTIVE:
+            if conversation.status == TransferConversationStatus.CLOSED:
                 self.transfer_refresh_timer.stop()
                 self._show_transfer_list_page()
                 return
@@ -1254,6 +1260,9 @@ class MainWindow(QMainWindow):
             self.transfer_refresh_timer.stop()
 
     def _send_current_transfer_text(self) -> None:
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        if conversation.status == TransferConversationStatus.CLOSED:
+            return
         text = self.transfer_message_input.toPlainText()
         self.service.add_transfer_text_message(
             self.current_transfer_id,
@@ -1265,6 +1274,9 @@ class MainWindow(QMainWindow):
 
     def _edit_last_transfer_text(self) -> None:
         if not self.current_transfer_id:
+            return
+        conversation = self.service.get_transfer_conversation(self.current_transfer_id)
+        if conversation.status == TransferConversationStatus.CLOSED:
             return
         text = self.transfer_message_input.toPlainText()
         messages = [
