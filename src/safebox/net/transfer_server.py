@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+from email.parser import BytesParser
+from email.policy import default
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from typing import Any
 
 from safebox.core.services import VaultService
-from safebox.core.transfer import TransferMessageSender
+from safebox.core.transfer import TransferMessageKind, TransferMessageSender
 
 MOBILE_PAGE = """<!doctype html>
 <html lang="zh-CN">
@@ -24,6 +27,7 @@ MOBILE_PAGE = """<!doctype html>
     }
     main { max-width: 720px; margin: 0 auto; padding: 24px; }
     h1 { font-size: 28px; margin: 0 0 16px; }
+    .tools { margin-top: 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     textarea {
       box-sizing: border-box;
       width: 100%;
@@ -51,6 +55,13 @@ MOBILE_PAGE = """<!doctype html>
     <h1>传输助手</h1>
     <textarea id="text" placeholder="输入要发送到电脑的文字"></textarea>
     <button onclick="sendText()">发送</button>
+    <div class="tools">
+      <label>
+        选择文件
+        <input id="file" type="file">
+      </label>
+      <button onclick="uploadFile()">上传附件</button>
+    </div>
     <div id="status"></div>
   </main>
   <script>
@@ -63,6 +74,18 @@ MOBILE_PAGE = """<!doctype html>
       });
       document.getElementById('status').textContent = response.ok ? '已发送' : '发送失败';
       if (response.ok) document.getElementById('text').value = '';
+    }
+    async function uploadFile() {
+      const file = document.getElementById('file').files[0];
+      if (!file) {
+        document.getElementById('status').textContent = '请选择文件';
+        return;
+      }
+      const data = new FormData();
+      data.append('file', file);
+      const response = await fetch('/api/uploads', { method: 'POST', body: data });
+      document.getElementById('status').textContent = response.ok ? '已上传' : '上传失败';
+      if (response.ok) document.getElementById('file').value = '';
     }
   </script>
 </body>
@@ -84,6 +107,7 @@ class TransferHttpServer:
         self.port = port
         self.device_name = device_name
         self.conversation_id = ""
+        self.upload_dir = service.store.path.parent / "attachments"
         self._server: ThreadingHTTPServer | None = None
         self._thread: Thread | None = None
 
@@ -137,9 +161,15 @@ class TransferHttpServer:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self) -> None:
-                if self.path != "/api/messages":
-                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                if self.path == "/api/messages":
+                    self._handle_message_post()
                     return
+                if self.path == "/api/uploads":
+                    self._handle_upload_post()
+                    return
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
+            def _handle_message_post(self) -> None:
                 payload = self._read_json()
                 text = str(payload.get("text", "")).strip()
                 if not text:
@@ -151,6 +181,45 @@ class TransferHttpServer:
                     text=text,
                 )
                 self._send_json(HTTPStatus.OK, {"ok": True, "message_id": message.id})
+
+            def _handle_upload_post(self) -> None:
+                content_type = self.headers.get("Content-Type", "")
+                if "multipart/form-data" not in content_type:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "multipart_required"})
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+                file_part = _parse_multipart_file(content_type, body)
+                if file_part is None:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "file_required"})
+                    return
+                filename, mime_type, content = file_part
+                target_dir = owner.upload_dir / owner.conversation_id
+                target_dir.mkdir(parents=True, exist_ok=True)
+                target = _unique_path(target_dir / filename)
+                target.write_bytes(content)
+                kind = (
+                    TransferMessageKind.IMAGE
+                    if mime_type.startswith("image/")
+                    else TransferMessageKind.FILE
+                )
+                message, attachment = owner.service.add_transfer_attachment_message(
+                    owner.conversation_id,
+                    sender=TransferMessageSender.PHONE,
+                    kind=kind,
+                    filename=filename,
+                    mime_type=mime_type,
+                    size_bytes=len(content),
+                    storage_path=str(target),
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "message_id": message.id,
+                        "attachment_id": attachment.id,
+                    },
+                )
 
             def log_message(self, format: str, *args: Any) -> None:
                 return
@@ -183,3 +252,37 @@ class TransferHttpServer:
                 self.wfile.write(body)
 
         return Handler
+
+
+def _parse_multipart_file(
+    content_type: str,
+    body: bytes,
+) -> tuple[str, str, bytes] | None:
+    message = BytesParser(policy=default).parsebytes(
+        f"Content-Type: {content_type}\r\n\r\n".encode() + body
+    )
+    if not message.is_multipart():
+        return None
+    for part in message.iter_parts():
+        if part.get_param("name", header="content-disposition") != "file":
+            continue
+        filename = part.get_filename()
+        if not filename:
+            continue
+        payload = part.get_payload(decode=True) or b""
+        return Path(filename).name, part.get_content_type(), payload
+    return None
+
+
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    index = 1
+    while True:
+        candidate = parent / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
