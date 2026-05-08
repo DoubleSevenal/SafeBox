@@ -1975,6 +1975,7 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setObjectName("AttachmentScroll")
         content = QWidget()
+        content.setObjectName("AttachmentScrollContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(2, 2, 2, 2)
         content_layout.setSpacing(10)

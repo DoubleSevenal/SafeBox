@@ -181,14 +181,14 @@ QScrollArea#AttachmentScroll {
     border: 0;
     background: transparent;
 }
-QScrollArea#AttachmentScroll QWidget {
+QWidget#AttachmentScrollContent {
     background: transparent;
 }
 QScrollArea#PageScroll {
     border: 0;
     background: transparent;
 }
-QScrollArea#PageScroll QWidget {
+QScrollArea#PageScroll > QWidget {
     background: transparent;
 }
 QLabel#SettingsLabel {
