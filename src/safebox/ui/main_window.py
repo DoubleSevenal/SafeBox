@@ -144,10 +144,11 @@ class MainWindow(QMainWindow):
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
 
-        sidebar = QFrame()
-        sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(220)
-        side_layout = QVBoxLayout(sidebar)
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("Sidebar")
+        self.sidebar.setFixedWidth(220)
+        self.sidebar.setVisible(False)
+        side_layout = QVBoxLayout(self.sidebar)
         side_layout.setContentsMargins(16, 18, 16, 16)
         self.header_brand = QFrame()
         self.header_brand.setObjectName("HeaderBrand")
@@ -233,7 +234,7 @@ class MainWindow(QMainWindow):
             self.pages.addWidget(page)
         self._reset_module_pages()
 
-        shell.addWidget(sidebar)
+        shell.addWidget(self.sidebar)
         shell.addWidget(self.pages, 1)
         self.setCentralWidget(root)
 
@@ -1338,6 +1339,7 @@ class MainWindow(QMainWindow):
         self._set_login_mode(VaultOpenMode.OPEN)
         self._refresh_settings_view()
         self._reset_module_pages()
+        self.sidebar.setVisible(True)
         self._show_accounts_list_page()
 
     def _apply_profile_download_dir(self) -> None:
@@ -1443,6 +1445,7 @@ class MainWindow(QMainWindow):
         self._refresh_download_history()
 
     def _show_login_page(self) -> None:
+        self.sidebar.setVisible(False)
         self.pages.setCurrentWidget(self.login_page)
         self.active_nav_key = ""
 

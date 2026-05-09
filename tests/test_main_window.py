@@ -1171,9 +1171,29 @@ def test_main_window_starts_with_embedded_login_page(qt_app) -> None:
     window = MainWindow(lambda name: VaultService(Path(":memory:")))
 
     assert window.pages.currentWidget() == window.login_page
+    assert window.sidebar.isHidden()
     assert window.login_vault_name.text()
     assert window.login_password.placeholderText() == "输入保险箱密码"
     assert window.login_page.parent() is window.pages
+
+    window.close()
+
+
+def test_sidebar_returns_after_embedded_login_success(vault_path: Path, qt_app) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window.profile_base_dir = base_dir
+    window.login_vault_name.setText("于祥磊")
+    window.login_password.setText("wojiao321.")
+
+    window._open_vault_from_login()
+
+    assert window.pages.currentWidget() == window.accounts_page
+    assert not window.sidebar.isHidden()
 
     window.close()
 
