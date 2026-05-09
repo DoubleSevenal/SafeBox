@@ -35,6 +35,7 @@ def test_profile_settings_persist_auto_lock_seconds(tmp_path: Path) -> None:
         backup_dir="D:\\SafeBoxBackup",
         auto_sync_on_close=False,
         auto_lock_seconds=1200,
+        transfer_download_dir="D:\\SafeBoxDownloads",
     )
 
     save_profile_settings(tmp_path, "school", settings)
@@ -43,6 +44,7 @@ def test_profile_settings_persist_auto_lock_seconds(tmp_path: Path) -> None:
     assert loaded.backup_dir == "D:\\SafeBoxBackup"
     assert not loaded.auto_sync_on_close
     assert loaded.auto_lock_seconds == 1200
+    assert loaded.transfer_download_dir == "D:\\SafeBoxDownloads"
 
 
 def test_sync_vault_to_backup_uses_sync_time_for_backup_mtime(tmp_path: Path) -> None:

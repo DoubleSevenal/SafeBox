@@ -14,6 +14,7 @@ class VaultProfileSettings:
     backup_dir: str = ""
     auto_sync_on_close: bool = True
     auto_lock_seconds: int = 300
+    transfer_download_dir: str = ""
     trusted_transfer_devices: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -48,6 +49,7 @@ def load_profile_settings(base_dir: Path, name: str) -> VaultProfileSettings:
         backup_dir=str(data.get("backup_dir", "")),
         auto_sync_on_close=bool(data.get("auto_sync_on_close", True)),
         auto_lock_seconds=int(data.get("auto_lock_seconds", 300)),
+        transfer_download_dir=str(data.get("transfer_download_dir", "")),
         trusted_transfer_devices=[
             {
                 "id": str(item.get("id", "")),
@@ -69,6 +71,7 @@ def save_profile_settings(base_dir: Path, name: str, settings: VaultProfileSetti
                 "backup_dir": settings.backup_dir,
                 "auto_sync_on_close": settings.auto_sync_on_close,
                 "auto_lock_seconds": settings.auto_lock_seconds,
+                "transfer_download_dir": settings.transfer_download_dir,
                 "trusted_transfer_devices": settings.trusted_transfer_devices,
             },
             ensure_ascii=False,

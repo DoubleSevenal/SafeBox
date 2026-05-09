@@ -1159,6 +1159,10 @@ def test_settings_can_change_transfer_download_directory(
 
     assert window.settings.transfer_download_dir == download_dir
     assert str(download_dir) in window.transfer_download_dir_label.text()
+    assert (
+        load_profile_settings(base_dir, "于祥磊").transfer_download_dir
+        == str(download_dir)
+    )
 
     window.close()
 
