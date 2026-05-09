@@ -34,6 +34,19 @@ def _pair_transfer_phone(window: MainWindow) -> None:
         timeout=5,
     ):
         pass
+    request = Request(
+        f"{window.transfer_server.url}/api/pair",
+        data=json.dumps(
+            {
+                "token": window.transfer_server.connection_token,
+                "code": window.transfer_server.verification_code,
+            }
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5):
+        pass
     window._check_transfer_pairing()
 
 
@@ -370,12 +383,27 @@ def test_connect_phone_waits_for_phone_before_creating_chat(
     assert window.service.list_transfer_conversations() == []
     assert window.transfer_server.url.startswith("http://")
     assert window.transfer_server.display_url in window.transfer_connect_url_value.text()
-    assert "等待手机打开链接" in window.transfer_connect_code_value.text()
+    assert "给未信任或首次连接的手机使用" in window.transfer_connect_type_value.text()
+    assert "验证码：" in window.transfer_connect_code_value.text()
+    assert window.transfer_trusted_link_value.isHidden()
 
     with urlopen(
         f"{window.transfer_server.url}/?token={window.transfer_server.connection_token}",
         timeout=5,
     ):
+        pass
+    request = Request(
+        f"{window.transfer_server.url}/api/pair",
+        data=json.dumps(
+            {
+                "token": window.transfer_server.connection_token,
+                "code": window.transfer_server.verification_code,
+            }
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5):
         pass
     window._check_transfer_pairing()
 
@@ -384,6 +412,48 @@ def test_connect_phone_waits_for_phone_before_creating_chat(
     assert window.transfer_chat_title.text() == "手机对话"
     assert window.transfer_messages_view.toPlainText() == ""
     assert window.transfer_server.conversation_id == window.current_transfer_id
+
+    window.transfer_server.stop()
+    window.close()
+
+
+def test_trusted_device_connection_has_separate_link_feedback(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window.profile_settings.trusted_transfer_devices.append(
+        {
+            "id": "td_phone",
+            "name": "IQOO12",
+            "last_connected_at": "2026-05-09T22:46:01+08:00",
+        }
+    )
+    window._show_transfer_page()
+    window.connect_phone_button.click()
+
+    window.transfer_trusted_list.setCurrentRow(0)
+    window.transfer_trusted_connect_button.click()
+
+    assert window.transfer_server is not None
+    assert window.transfer_connect_url_value.text() == "未启动新手机连接"
+    assert "可信设备：IQOO12" in window.transfer_trusted_link_title.text()
+    assert window.transfer_server.display_url in window.transfer_trusted_link_value.text()
+    assert not window.transfer_trusted_link_value.isHidden()
+    assert "等待 IQOO12 打开可信设备链接" in window.transfer_trusted_status.text()
+
+    window._copy_transfer_link()
+    assert "可信设备链接已复制" in window.transfer_trusted_status.text()
 
     window.transfer_server.stop()
     window.close()
@@ -1062,6 +1132,266 @@ def test_settings_show_transfer_download_defaults_and_history(
     window.close()
 
 
+def test_settings_can_change_transfer_download_directory(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+    download_dir = tmp_path / "SafeBoxDownloads"
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    monkeypatch.setattr(
+        main_window.QFileDialog,
+        "getExistingDirectory",
+        lambda *args, **kwargs: str(download_dir),
+    )
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    window._choose_transfer_download_dir()
+
+    assert window.settings.transfer_download_dir == download_dir
+    assert str(download_dir) in window.transfer_download_dir_label.text()
+
+    window.close()
+
+
+def test_main_window_starts_with_embedded_login_page(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+
+    assert window.pages.currentWidget() == window.login_page
+    assert window.login_vault_name.text()
+    assert window.login_password.placeholderText() == "输入保险箱密码"
+    assert window.login_page.parent() is window.pages
+
+    window.close()
+
+
+def test_transfer_organize_menu_opens_download_history_dialog(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+    actions = {
+        action.text(): action
+        for action in window.transfer_organize_menu.actions()
+    }
+
+    assert "查看下载记录" in actions
+    assert "下载全部附件" not in actions
+
+    opened = []
+    original = window._show_download_history_dialog
+    try:
+        window._show_download_history_dialog = lambda: opened.append(True)
+        actions["查看下载记录"].trigger()
+    finally:
+        window._show_download_history_dialog = original
+
+    assert opened == [True]
+    window.close()
+
+
+def test_download_history_page_opens_folder_and_deletes_selected_files(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    first_message, first_attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=3,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    second_message, second_attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="receipt.txt",
+        mime_type="text/plain",
+        size_bytes=4,
+        storage_path="attachments/tc/receipt.txt",
+        sha256="def456",
+    )
+    download_dir = tmp_path / "downloads"
+    first_path = download_dir / "invoice.pdf"
+    second_path = download_dir / "receipt.txt"
+    download_dir.mkdir()
+    first_path.write_text("pdf", encoding="utf-8")
+    second_path.write_text("text", encoding="utf-8")
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=first_message.id,
+        attachment_id=first_attachment.id,
+        filename=first_attachment.filename,
+        saved_path=first_path,
+        size_bytes=first_attachment.size_bytes,
+    )
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=second_message.id,
+        attachment_id=second_attachment.id,
+        filename=second_attachment.filename,
+        saved_path=second_path,
+        size_bytes=second_attachment.size_bytes,
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window.settings = replace(window.settings, transfer_download_dir=download_dir)
+    opened_paths: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_open_local_path",
+        lambda path, status=None: opened_paths.append(str(path)),
+    )
+
+    window._show_download_history_page()
+    page_buttons = window.download_history_page.findChildren(main_window.QPushButton)
+    assert any(button.text() == "删除文件" for button in page_buttons)
+    assert any(button.text() == "打开文件夹" for button in page_buttons)
+
+    window._open_transfer_download_folder()
+    assert opened_paths[-1] == str(download_dir)
+
+    window._open_download_history_item(window.download_history_list.item(0))
+    assert opened_paths[-1] == str(first_path)
+
+    window.batch_modes["download_history"] = True
+    window._apply_batch_mode("download_history", window.download_history_list)
+    window.download_history_list.item(0).setSelected(True)
+    window.download_history_list.item(1).setSelected(True)
+    window._delete_selected_download_history_files()
+
+    assert not first_path.exists()
+    assert not second_path.exists()
+    assert len(window.service.list_download_history()) == 2
+    window._refresh_download_history()
+    assert "文件不存在" in window.download_history_status.text()
+
+    window.close()
+
+
+def test_download_history_dialog_supports_multi_select_delete_files_and_open_folder(
+    vault_path: Path,
+    monkeypatch,
+    tmp_path,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    conversation = service.create_transfer_conversation(
+        title="报销资料",
+        device_name="安卓手机",
+    )
+    first_message, first_attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="invoice.pdf",
+        mime_type="application/pdf",
+        size_bytes=3,
+        storage_path="attachments/tc/invoice.pdf",
+        sha256="abc123",
+    )
+    second_message, second_attachment = service.add_transfer_attachment_message(
+        conversation.id,
+        sender=TransferMessageSender.PHONE,
+        kind=TransferMessageKind.FILE,
+        filename="receipt.txt",
+        mime_type="text/plain",
+        size_bytes=4,
+        storage_path="attachments/tc/receipt.txt",
+        sha256="def456",
+    )
+    download_dir = tmp_path / "downloads"
+    first_path = download_dir / "invoice.pdf"
+    second_path = download_dir / "receipt.txt"
+    download_dir.mkdir()
+    first_path.write_text("pdf", encoding="utf-8")
+    second_path.write_text("text", encoding="utf-8")
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=first_message.id,
+        attachment_id=first_attachment.id,
+        filename=first_attachment.filename,
+        saved_path=first_path,
+        size_bytes=first_attachment.size_bytes,
+    )
+    service.record_transfer_download(
+        conversation_id=conversation.id,
+        message_id=second_message.id,
+        attachment_id=second_attachment.id,
+        filename=second_attachment.filename,
+        saved_path=second_path,
+        size_bytes=second_attachment.size_bytes,
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window.settings = replace(window.settings, transfer_download_dir=download_dir)
+    opened_paths: list[str] = []
+    monkeypatch.setattr(
+        window,
+        "_open_local_path",
+        lambda path, status=None: opened_paths.append(str(path)),
+    )
+
+    window._show_download_history_dialog()
+    dialog = window.download_history_dialog
+    buttons = {button.text(): button for button in dialog.findChildren(main_window.QPushButton)}
+    list_widget = dialog.findChild(main_window.QListWidget)
+
+    assert "多选" in buttons
+    assert "删除文件" in buttons
+    assert "打开文件夹" in buttons
+    assert list_widget is not None
+
+    buttons["打开文件夹"].click()
+    assert opened_paths[-1] == str(download_dir)
+
+    list_widget.itemDoubleClicked.emit(list_widget.item(0))
+    assert opened_paths[-1] == str(first_path)
+
+    buttons["多选"].click()
+    assert list_widget.selectionMode() == main_window.QAbstractItemView.SelectionMode.MultiSelection
+    list_widget.item(0).setSelected(True)
+    list_widget.item(1).setSelected(True)
+    buttons["删除文件"].click()
+
+    assert not first_path.exists()
+    assert not second_path.exists()
+    assert len(window.service.list_download_history()) == 2
+
+    dialog.close()
+    window.close()
+
+
 def test_explicit_back_resets_account_module_to_list(
     vault_path: Path,
     monkeypatch,
@@ -1172,6 +1502,11 @@ def test_sidebar_separates_management_nav_and_wraps_vault_summary(qt_app) -> Non
     assert window.transfer_nav.text() == "传输助手"
     assert window.trash_nav.parent().objectName() == "ManagementNavGroup"
     assert window.settings_nav.parent().objectName() == "ManagementNavGroup"
+    assert window.minimumSizeHint().height() <= 720
+
+    window.resize(1120, 720)
+    nav_bottom = window.settings_nav.mapTo(window, window.settings_nav.rect().bottomLeft()).y()
+    assert nav_bottom < window.height()
 
     window.close()
 

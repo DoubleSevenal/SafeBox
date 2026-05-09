@@ -160,6 +160,13 @@ MOBILE_PAGE = """<!doctype html>
       border-radius: 14px;
       background: #ffffff;
     }
+    .pair-form {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
     .hidden { display: none; }
     .readonly {
       margin: 8px 12px 0;
@@ -207,7 +214,11 @@ MOBILE_PAGE = """<!doctype html>
     </header>
     <div class="message-panel">
       <div id="pairBox" class="pair hidden">
-        正在连接电脑，连接成功后即可直接互发文字、图片和文件。
+        <div id="pairHint">请输入电脑端显示的验证码，验证通过后自动进入聊天。</div>
+        <div id="pairForm" class="pair-form">
+          <input id="pairCode" type="text" inputmode="numeric" maxlength="6" placeholder="验证码">
+          <button onclick="pairWithCode()">连接</button>
+        </div>
       </div>
       <div id="readonlyNotice" class="readonly compact hidden">
         此次对话已结束，可上下滑动查看历史消息和下载附件。
@@ -216,13 +227,23 @@ MOBILE_PAGE = """<!doctype html>
     </div>
     <footer id="composer">
       <div class="compose">
-        <textarea id="text" placeholder="输入要发送到电脑的文字"></textarea>
+            <textarea id="text" placeholder="输入要发送到电脑的文字"></textarea>
         <button onclick="sendText()">发送</button>
       </div>
       <div class="tools">
         <label class="file-label">
-          选择文件
-          <input id="file" type="file" onchange="uploadSelectedFile()">
+          图片
+          <input
+            id="images"
+            type="file"
+            accept="image/*"
+            multiple
+            onchange="uploadSelectedFiles('images')"
+          >
+        </label>
+        <label class="file-label">
+          文件
+          <input id="files" type="file" multiple onchange="uploadSelectedFiles('files')">
         </label>
         <div id="status"></div>
       </div>
@@ -230,6 +251,7 @@ MOBILE_PAGE = """<!doctype html>
   </main>
   <script>
     let paired = false;
+    let requiresCode = false;
     let lastMessagesSignature = '';
     let messagesLoading = false;
 
@@ -238,9 +260,20 @@ MOBILE_PAGE = """<!doctype html>
       document.getElementById('pairBox').className = paired ? 'pair hidden' : 'pair';
     }
 
+    function setPairMode(session) {
+      requiresCode = !!session.requires_code;
+      const form = document.getElementById('pairForm');
+      const hint = document.getElementById('pairHint');
+      form.hidden = !requiresCode || session.paired;
+      hint.textContent = requiresCode
+        ? '请输入电脑端显示的验证码，验证通过后自动进入聊天。'
+        : '正在连接可信设备，连接成功后即可互发文字、图片和文件。';
+    }
+
     function setWritable(writable) {
       document.getElementById('text').disabled = !writable;
-      document.getElementById('file').disabled = !writable;
+      document.getElementById('images').disabled = !writable;
+      document.getElementById('files').disabled = !writable;
       const footer = document.getElementById('composer');
       footer.hidden = !writable;
       document.querySelector('.file-label').className = writable
@@ -264,6 +297,7 @@ MOBILE_PAGE = """<!doctype html>
       const errors = {
         pair_required: '连接链接已失效，请回到电脑重新复制连接',
         invalid_token: '连接链接已失效，请回到电脑重新复制连接',
+        invalid_code: '验证码不正确，请核对电脑端显示的验证码',
         text_required: '请输入内容',
         multipart_required: '上传格式不正确',
         file_required: '请选择文件',
@@ -278,6 +312,7 @@ MOBILE_PAGE = """<!doctype html>
       const session = await response.json();
       const wasPaired = paired;
       setPaired(session.paired);
+      setPairMode(session);
       setSessionState(session);
       setWritable(session.paired && session.status !== 'closed' && !session.closed_at);
       if (!wasPaired && paired) loadMessages(true);
@@ -286,6 +321,24 @@ MOBILE_PAGE = """<!doctype html>
     function refreshAfterWrite() {
       loadMessages(true);
       initSession();
+    }
+    async function pairWithCode() {
+      const code = document.getElementById('pairCode').value.trim();
+      if (!code) {
+        document.getElementById('status').textContent = '请输入验证码';
+        return;
+      }
+      const token = new URLSearchParams(location.search).get('token') || '';
+      const response = await fetch('/api/pair', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token, code})
+      });
+      const payload = await response.json().catch(() => ({}));
+      document.getElementById('status').textContent = response.ok
+        ? '已连接'
+        : statusText(payload, '连接失败');
+      if (response.ok) initSession();
     }
     async function sendText() {
       const text = document.getElementById('text').value;
@@ -307,24 +360,32 @@ MOBILE_PAGE = """<!doctype html>
         refreshAfterWrite();
       }
     }
-    async function uploadSelectedFile() {
-      const file = document.getElementById('file').files[0];
-      if (!file) {
-        document.getElementById('status').textContent = '请选择文件';
-        return;
-      }
+    async function uploadOneFile(file) {
       document.getElementById('status').textContent = '正在上传 ' + file.name;
       const data = new FormData();
       data.append('file', file);
       const response = await fetch('/api/uploads', { method: 'POST', body: data });
       const payload = await response.json().catch(() => ({}));
-      document.getElementById('status').textContent = response.ok
-        ? '已上传'
-        : statusText(payload, '上传失败');
-      if (response.ok) {
-        document.getElementById('file').value = '';
-        refreshAfterWrite();
+      if (!response.ok) {
+        document.getElementById('status').textContent = statusText(payload, '上传失败');
+        return false;
       }
+      return true;
+    }
+    async function uploadSelectedFiles(inputId) {
+      const input = document.getElementById(inputId);
+      const files = Array.from(input.files || []);
+      if (!files.length) {
+        document.getElementById('status').textContent = '请选择文件';
+        return;
+      }
+      let uploaded = 0;
+      for (const file of files) {
+        if (await uploadOneFile(file)) uploaded += 1;
+      }
+      input.value = '';
+      document.getElementById('status').textContent = '已上传 ' + uploaded + ' 个文件';
+      if (uploaded) refreshAfterWrite();
     }
     async function closeConversation() {
       const response = await fetch('/api/close', { method: 'POST' });
@@ -436,8 +497,9 @@ class TransferHttpServer:
         self.port = port
         self.device_name = device_name
         self.lan_ip_provider = lan_ip_provider
-        self.connection_token = connection_token or verification_code or secrets.token_urlsafe(24)
-        self.verification_code = self.connection_token
+        self.connection_token = connection_token or secrets.token_urlsafe(24)
+        self.verification_code = verification_code or f"{secrets.randbelow(1_000_000):06d}"
+        self.requires_verification_code = bool(verification_code)
         self.paired = False
         self.conversation_id = ""
         self.upload_dir = service.store.path.parent / "attachments"
@@ -517,6 +579,7 @@ class TransferHttpServer:
                             "device_name": owner.device_name,
                             "paired": owner.paired,
                             "trusted": owner.paired,
+                            "requires_code": owner.requires_verification_code,
                             "status": conversation.status.value
                             if conversation is not None
                             else "waiting",
@@ -553,7 +616,11 @@ class TransferHttpServer:
 
             def _pair_from_query(self, query: str) -> None:
                 token = parse_qs(query).get("token", [""])[0]
-                if token and secrets.compare_digest(token, owner.connection_token):
+                if (
+                    token
+                    and secrets.compare_digest(token, owner.connection_token)
+                    and not owner.requires_verification_code
+                ):
                     owner.paired = True
                     owner.ensure_conversation()
 
@@ -562,6 +629,13 @@ class TransferHttpServer:
                 token = str(payload.get("token", "")).strip()
                 if not secrets.compare_digest(token, owner.connection_token):
                     self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid_token"})
+                    return
+                code = str(payload.get("code", "")).strip()
+                if owner.requires_verification_code and not secrets.compare_digest(
+                    code,
+                    owner.verification_code,
+                ):
+                    self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid_code"})
                     return
                 owner.paired = True
                 owner.ensure_conversation()
