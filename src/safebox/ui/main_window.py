@@ -1289,6 +1289,7 @@ class MainWindow(QMainWindow):
         self.service = self.service_factory(vault_name)
         self.settings = AppSettings(vault_path=self.service.store.path)
         self.profile_settings = load_profile_settings(self.profile_base_dir, vault_name)
+        self._apply_profile_download_dir()
         self._apply_auto_lock_settings()
         if not password:
             self._show_login_error(
@@ -1338,6 +1339,16 @@ class MainWindow(QMainWindow):
         self._refresh_settings_view()
         self._reset_module_pages()
         self._show_accounts_list_page()
+
+    def _apply_profile_download_dir(self) -> None:
+        if not self.profile_settings.transfer_download_dir:
+            return
+        self.settings = AppSettings(
+            vault_path=self.settings.vault_path,
+            auto_lock_seconds=self.settings.auto_lock_seconds,
+            clipboard_clear_seconds=self.settings.clipboard_clear_seconds,
+            transfer_download_dir=Path(self.profile_settings.transfer_download_dir),
+        )
 
     def _show_unlock_dialog(self) -> None:
         self._open_vault()
@@ -1718,6 +1729,8 @@ class MainWindow(QMainWindow):
             clipboard_clear_seconds=self.settings.clipboard_clear_seconds,
             transfer_download_dir=Path(directory),
         )
+        self.profile_settings.transfer_download_dir = str(self.settings.transfer_download_dir)
+        save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
         self._refresh_settings_view()
         self._show_toast("已更新默认下载位置")
 
