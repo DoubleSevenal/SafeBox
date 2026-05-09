@@ -70,7 +70,7 @@ from safebox.core.vault_profiles import (
     sync_vault_to_backup,
 )
 from safebox.net.transfer_server import TransferHttpServer
-from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
+from safebox.ui.branding import SAFEBOX_LOGIN_LOGO_PATH, SAFEBOX_NAV_MARK_PATH
 from safebox.ui.clipboard import SecureClipboard
 from safebox.ui.dialogs import (
     DEFAULT_VAULT_ID,
@@ -104,6 +104,8 @@ class MainWindow(QMainWindow):
         self.current_account_id = ""
         self.current_note_id = ""
         self.current_transfer_id = ""
+        self.transfer_connect_mode = ""
+        self.transfer_trusted_device_name = ""
         self.transfer_server: TransferHttpServer | None = None
         self.transfer_messages_signature = ""
         self.transfer_connect_info_rows: list[QFrame] = []
@@ -134,7 +136,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SafeBox")
         self._build_ui()
         self.installEventFilter(self)
-        QTimer.singleShot(0, self._open_vault)
+        QTimer.singleShot(0, self._show_login_page)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -196,12 +198,13 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(self.accounts_nav)
         side_layout.addWidget(self.notes_nav)
         side_layout.addWidget(self.transfer_nav)
-        side_layout.addStretch()
         side_layout.addWidget(management_nav)
+        side_layout.addStretch()
         side_layout.addSpacing(12)
         side_layout.addWidget(lock)
 
         self.pages = QStackedWidget()
+        self.login_page = self._build_login_page()
         self.accounts_page = self._build_accounts_page()
         self.account_detail_page = self._build_account_detail_page()
         self.notes_page = self._build_notes_page()
@@ -214,6 +217,7 @@ class MainWindow(QMainWindow):
         self.settings_page = self._build_settings_page()
         self.download_history_page = self._build_download_history_page()
         for page in (
+            self.login_page,
             self.accounts_page,
             self.account_detail_page,
             self.notes_page,
@@ -239,6 +243,96 @@ class MainWindow(QMainWindow):
         self.trash_nav.clicked.connect(self._show_trash_page)
         self.settings_nav.clicked.connect(self._show_settings_page)
         lock.clicked.connect(self._lock)
+
+    def _build_login_page(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(28, 28, 28, 28)
+        outer.addStretch()
+        shell = QFrame()
+        shell.setObjectName("DialogHero")
+        shell.setMaximumWidth(640)
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(28, 28, 28, 24)
+        layout.setSpacing(16)
+        self.login_brand_mark = QLabel()
+        self.login_brand_mark.setObjectName("BrandMarkLarge")
+        self.login_brand_mark.setFixedSize(124, 124)
+        self.login_brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.login_brand_mark.setPixmap(
+            QPixmap(str(SAFEBOX_LOGIN_LOGO_PATH)).scaled(
+                124,
+                124,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        title = QLabel("SafeBox")
+        title.setObjectName("DialogTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint = QLabel("私人保险箱。用保险箱ID和保险箱密码打开对应的数据空间。")
+        hint.setObjectName("MutedText")
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.login_vault_name = QLineEdit()
+        self.login_vault_name.setObjectName("VaultInput")
+        self.login_vault_name.setPlaceholderText("输入保险箱ID")
+        self.login_vault_name.setText(DEFAULT_VAULT_ID)
+        self.login_password = QLineEdit()
+        self.login_password.setObjectName("VaultInput")
+        self.login_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.login_password.setPlaceholderText("输入保险箱密码")
+        self.login_confirm_password = QLineEdit()
+        self.login_confirm_password.setObjectName("VaultInput")
+        self.login_confirm_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.login_confirm_password.setPlaceholderText("再次输入保险箱密码")
+        self.login_confirm_password.setVisible(False)
+        self.login_confirm_label = QLabel("确认密码")
+        self.login_confirm_label.setObjectName("VaultFormLabel")
+        self.login_confirm_label.setVisible(False)
+        self.login_status = QLabel("")
+        self.login_status.setObjectName("DataStatus")
+        self.login_status.setWordWrap(True)
+        self.login_mode = VaultOpenMode.OPEN
+        self.login_open_button = QPushButton("打开保险箱")
+        self.login_open_button.setObjectName("PrimaryButton")
+        self.login_register_button = QPushButton("注册保险箱")
+        self.login_register_button.setObjectName("SubtleButton")
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(14)
+        form.setColumnMinimumWidth(0, 86)
+        form.setColumnStretch(1, 1)
+        id_label = QLabel("保险箱ID")
+        id_label.setObjectName("VaultFormLabel")
+        password_label = QLabel("保险箱密码")
+        password_label.setObjectName("VaultFormLabel")
+        form.addWidget(id_label, 0, 0)
+        form.addWidget(self.login_vault_name, 0, 1)
+        form.addWidget(password_label, 1, 0)
+        form.addWidget(self.login_password, 1, 1)
+        form.addWidget(self.login_confirm_label, 2, 0)
+        form.addWidget(self.login_confirm_password, 2, 1)
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        actions.addWidget(self.login_open_button, 1)
+        actions.addWidget(self.login_register_button, 1)
+
+        layout.addWidget(self.login_brand_mark, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(title)
+        layout.addWidget(hint)
+        layout.addLayout(form)
+        layout.addWidget(self.login_status)
+        layout.addLayout(actions)
+        outer.addWidget(shell, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addStretch()
+
+        self.login_open_button.clicked.connect(self._open_vault_from_login)
+        self.login_register_button.clicked.connect(self._register_vault_from_login)
+        self.login_password.returnPressed.connect(self._open_vault_from_login)
+        self.login_confirm_password.returnPressed.connect(self._register_vault_from_login)
+        return page
 
     def _build_accounts_page(self) -> QWidget:
         page = QWidget()
@@ -470,6 +564,8 @@ class MainWindow(QMainWindow):
         self.transfer_connect_title.setObjectName("HeroTitle")
         self.transfer_connect_meta = QLabel("手机和电脑在同一个 WiFi，或手机给电脑开热点。")
         self.transfer_connect_meta.setObjectName("HeroMeta")
+        self.transfer_connect_type_value = QLabel("")
+        self.transfer_connect_type_value.setObjectName("SettingsValue")
         self.transfer_connect_url_value = QLabel("")
         self.transfer_connect_url_value.setObjectName("SettingsValue")
         self.transfer_connect_url_value.setTextInteractionFlags(
@@ -480,13 +576,15 @@ class MainWindow(QMainWindow):
         self.transfer_connect_code_value.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
-        for value in (self.transfer_connect_url_value, self.transfer_connect_code_value):
+        for value in (
+            self.transfer_connect_type_value,
+            self.transfer_connect_url_value,
+            self.transfer_connect_code_value,
+        ):
             value.setMinimumHeight(34)
             value.setWordWrap(True)
-        self.transfer_connect_copy_button = QPushButton("复制连接链接")
+        self.transfer_connect_copy_button = QPushButton("复制新手机链接")
         self.transfer_connect_copy_button.setObjectName("PrimaryButton")
-        self.transfer_connect_open_chat_button = QPushButton("进入当前对话")
-        self.transfer_connect_open_chat_button.setObjectName("SubtleButton")
         self.transfer_connect_status = QLabel("等待手机打开连接链接。")
         self.transfer_connect_status.setObjectName("TransferConnectStatus")
         self.transfer_connect_status.setMinimumHeight(48)
@@ -497,6 +595,24 @@ class MainWindow(QMainWindow):
         self.transfer_trusted_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.transfer_trusted_connect_button = QPushButton("连接选中设备")
         self.transfer_trusted_connect_button.setObjectName("PrimaryButton")
+        self.transfer_trusted_copy_button = QPushButton("复制可信设备链接")
+        self.transfer_trusted_copy_button.setObjectName("PrimaryButton")
+        self.transfer_trusted_copy_button.setVisible(False)
+        self.transfer_trusted_link_title = QLabel("可信设备链接")
+        self.transfer_trusted_link_title.setObjectName("TransferConnectInfoLabel")
+        self.transfer_trusted_link_title.setVisible(False)
+        self.transfer_trusted_link_value = QLabel("")
+        self.transfer_trusted_link_value.setObjectName("SettingsValue")
+        self.transfer_trusted_link_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.transfer_trusted_link_value.setMinimumHeight(34)
+        self.transfer_trusted_link_value.setWordWrap(True)
+        self.transfer_trusted_link_value.setVisible(False)
+        self.transfer_trusted_status = QLabel("选择可信设备后，会在这里显示专用连接链接。")
+        self.transfer_trusted_status.setObjectName("TransferConnectStatus")
+        self.transfer_trusted_status.setMinimumHeight(42)
+        self.transfer_trusted_status.setWordWrap(True)
         hero = QFrame()
         hero.setObjectName("DetailHero")
         hero_layout = QVBoxLayout(hero)
@@ -510,11 +626,17 @@ class MainWindow(QMainWindow):
         connect_layout.setSpacing(14)
         connect_title = QLabel("手机浏览器连接")
         connect_title.setObjectName("SettingsCardTitle")
-        connect_hint = QLabel("在手机浏览器打开地址即可进入对话，不需要再输入验证码。")
+        connect_hint = QLabel(
+            "第一次连接或未信任的手机使用这里。复制链接到手机浏览器打开，"
+            "手机进入后电脑才会创建对话。"
+        )
         connect_hint.setObjectName("SettingsCardHint")
         connect_hint.setWordWrap(True)
         connect_layout.addWidget(connect_title)
         connect_layout.addWidget(connect_hint)
+        connect_layout.addWidget(
+            self._transfer_connect_info_row("连接用途", self.transfer_connect_type_value)
+        )
         connect_layout.addWidget(
             self._transfer_connect_info_row("访问地址", self.transfer_connect_url_value)
         )
@@ -524,7 +646,6 @@ class MainWindow(QMainWindow):
         connect_layout.addWidget(self.transfer_connect_status)
         actions = QHBoxLayout()
         actions.addStretch()
-        actions.addWidget(self.transfer_connect_open_chat_button)
         actions.addWidget(self.transfer_connect_copy_button)
         connect_layout.addLayout(actions)
         trusted_card = QFrame()
@@ -535,17 +656,21 @@ class MainWindow(QMainWindow):
         trusted_title = QLabel("可信设备")
         trusted_title.setObjectName("SettingsCardTitle")
         trusted_hint = QLabel(
-            "信任后的手机会显示在这里。点击设备会创建新的手机对话，"
-            "手机仍需打开本次连接链接。"
+            "已经信任过的手机从这里连接。选择设备后会生成专用链接，"
+            "复制给这台手机打开，连接后再进入对话。"
         )
         trusted_hint.setObjectName("SettingsCardHint")
         trusted_hint.setWordWrap(True)
         trusted_actions = QHBoxLayout()
         trusted_actions.addStretch()
+        trusted_actions.addWidget(self.transfer_trusted_copy_button)
         trusted_actions.addWidget(self.transfer_trusted_connect_button)
         trusted_layout.addWidget(trusted_title)
         trusted_layout.addWidget(trusted_hint)
         trusted_layout.addWidget(self.transfer_trusted_list)
+        trusted_layout.addWidget(self.transfer_trusted_link_title)
+        trusted_layout.addWidget(self.transfer_trusted_link_value)
+        trusted_layout.addWidget(self.transfer_trusted_status)
         trusted_layout.addLayout(trusted_actions)
         steps = QFrame()
         steps.setObjectName("SettingsCard")
@@ -557,8 +682,9 @@ class MainWindow(QMainWindow):
         steps_layout.addWidget(steps_title)
         for text in (
             "1. 确认手机和电脑在同一个 WiFi，或手机给电脑开热点。",
-            "2. 手机打开访问地址，无需输入验证码。",
-            "3. 手机进入聊天页后，可在电脑端点击“信任此设备”。",
+            "2. 新手机用“手机浏览器连接”，可信手机用“可信设备”里的专用链接。",
+            "3. 手机打开链接进入聊天页后，电脑端会自动进入本次对话。",
+            "4. 第一次连接成功后，可在对话页点击“信任此设备”方便下次连接。",
         ):
             row = QLabel(text)
             row.setObjectName("SettingsValue")
@@ -566,16 +692,26 @@ class MainWindow(QMainWindow):
             steps_layout.addWidget(row)
         top.addWidget(back)
         top.addStretch()
+        scroll = QScrollArea()
+        scroll.setObjectName("PageScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+        content_layout.addWidget(hero)
+        content_layout.addWidget(connect_card)
+        content_layout.addWidget(trusted_card)
+        content_layout.addWidget(steps)
+        content_layout.addStretch()
+        scroll.setWidget(content)
         layout.addLayout(top)
-        layout.addWidget(hero)
-        layout.addWidget(connect_card)
-        layout.addWidget(trusted_card)
-        layout.addWidget(steps)
-        layout.addStretch()
+        layout.addWidget(scroll, 1)
 
         back.clicked.connect(self._show_transfer_list_page)
         self.transfer_connect_copy_button.clicked.connect(self._copy_transfer_link)
-        self.transfer_connect_open_chat_button.clicked.connect(self._open_current_transfer_chat)
+        self.transfer_trusted_copy_button.clicked.connect(self._copy_transfer_link)
         self.transfer_trusted_connect_button.clicked.connect(self._connect_selected_trusted_device)
         return page
 
@@ -654,7 +790,7 @@ class MainWindow(QMainWindow):
         export_note_action = self.transfer_organize_menu.addAction("转存为小纸条")
         show_attachments_action = self.transfer_organize_menu.addAction("查看附件")
         preview_image_action = self.transfer_organize_menu.addAction("预览图片")
-        download_attachments_action = self.transfer_organize_menu.addAction("下载全部附件")
+        show_download_history_action = self.transfer_organize_menu.addAction("查看下载记录")
         self.transfer_organize_button.setMenu(self.transfer_organize_menu)
         self.transfer_trust_device_button = QPushButton("信任此设备")
         self.transfer_trust_device_button.setObjectName("SubtleButton")
@@ -682,6 +818,8 @@ class MainWindow(QMainWindow):
         self.transfer_message_input.setFixedHeight(92)
         self.transfer_send_button = QPushButton("发送到手机")
         self.transfer_send_button.setObjectName("PrimaryButton")
+        self.transfer_send_image_button = QPushButton("图片")
+        self.transfer_send_image_button.setObjectName("SubtleButton")
         self.transfer_send_file_button = QPushButton("发送文件")
         self.transfer_send_file_button.setObjectName("SubtleButton")
         hero = QFrame()
@@ -693,6 +831,7 @@ class MainWindow(QMainWindow):
         hero_layout.addLayout(connection_row)
         input_row = QHBoxLayout()
         input_row.addWidget(self.transfer_message_input, 1)
+        input_row.addWidget(self.transfer_send_image_button)
         input_row.addWidget(self.transfer_send_file_button)
         input_row.addWidget(self.transfer_send_button)
         top.addWidget(back)
@@ -710,9 +849,12 @@ class MainWindow(QMainWindow):
         self.transfer_trust_device_button.clicked.connect(self._trust_current_transfer_device)
         show_attachments_action.triggered.connect(self._show_current_transfer_attachments)
         preview_image_action.triggered.connect(self._preview_first_transfer_image)
-        download_attachments_action.triggered.connect(self._download_current_transfer_attachments)
+        show_download_history_action.triggered.connect(
+            lambda: self._show_download_history_dialog()
+        )
         self.transfer_close_button.clicked.connect(self._close_current_transfer_chat)
         self.transfer_send_button.clicked.connect(self._send_current_transfer_text)
+        self.transfer_send_image_button.clicked.connect(self._send_current_transfer_image)
         self.transfer_send_file_button.clicked.connect(self._send_current_transfer_file)
         self.transfer_copy_link_button.clicked.connect(self._copy_transfer_link)
         return page
@@ -937,6 +1079,8 @@ class MainWindow(QMainWindow):
         restore_backup.setObjectName("SubtleButton")
         show_download_history = QPushButton("查看下载历史")
         show_download_history.setObjectName("SubtleButton")
+        choose_download_dir = QPushButton("修改下载位置")
+        choose_download_dir.setObjectName("SubtleButton")
         self.auto_sync_check = QCheckBox("关闭软件时自动同步当前保险箱")
         self.auto_sync_check.setChecked(True)
         self.auto_lock_combo = QComboBox()
@@ -979,6 +1123,7 @@ class MainWindow(QMainWindow):
         )
         transfer_actions = QHBoxLayout()
         transfer_actions.setSpacing(10)
+        transfer_actions.addWidget(choose_download_dir)
         transfer_actions.addWidget(show_download_history)
         transfer_actions.addStretch()
         transfer_card.layout().addLayout(transfer_actions)
@@ -1009,6 +1154,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(security_card)
         layout.addStretch()
         choose_backup.clicked.connect(self._choose_backup_dir)
+        choose_download_dir.clicked.connect(self._choose_transfer_download_dir)
         sync_now.clicked.connect(self._sync_current_vault)
         restore_backup.clicked.connect(self._restore_current_vault_from_backup)
         show_download_history.clicked.connect(self._show_download_history_page)
@@ -1029,8 +1175,8 @@ class MainWindow(QMainWindow):
         back.setObjectName("SubtleButton")
         title = QLabel("下载历史")
         title.setObjectName("PageTitle")
-        clear = QPushButton("清空下载列表")
-        clear.setObjectName("DangerButton")
+        delete_file = QPushButton("删除文件")
+        delete_file.setObjectName("DangerButton")
         self.download_history_multi_button = QPushButton("多选")
         self.download_history_multi_button.setObjectName("SubtleButton")
         self.download_history_status = QLabel("下载历史为空")
@@ -1053,17 +1199,17 @@ class MainWindow(QMainWindow):
             )
         )
         action_row = QHBoxLayout()
-        open_record = QPushButton("打开选中文件")
-        open_record.setObjectName("PrimaryButton")
+        open_folder = QPushButton("打开文件夹")
+        open_folder.setObjectName("PrimaryButton")
         delete_record = QPushButton("清除选中记录")
         delete_record.setObjectName("SubtleButton")
         action_row.addStretch()
-        action_row.addWidget(open_record)
+        action_row.addWidget(open_folder)
         action_row.addWidget(delete_record)
         header.addWidget(back)
         header.addStretch()
         header.addWidget(self.download_history_multi_button)
-        header.addWidget(clear)
+        header.addWidget(delete_file)
         layout.addLayout(header)
         layout.addWidget(title)
         layout.addWidget(self.download_history_status)
@@ -1071,9 +1217,12 @@ class MainWindow(QMainWindow):
         layout.addLayout(action_row)
 
         back.clicked.connect(self._show_settings_page)
-        clear.clicked.connect(self._clear_download_history)
-        open_record.clicked.connect(self._open_selected_download_history)
+        delete_file.clicked.connect(self._delete_selected_download_history_files)
+        open_folder.clicked.connect(self._open_transfer_download_folder)
         delete_record.clicked.connect(self._delete_selected_download_history)
+        self.download_history_list.itemDoubleClicked.connect(
+            self._open_download_history_item
+        )
         self.download_history_multi_button.clicked.connect(
             lambda: self._toggle_batch_mode(
                 "download_history",
@@ -1119,37 +1268,73 @@ class MainWindow(QMainWindow):
             self.close()
             return
         vault_name, password, confirm_password, mode = dialog.values()
+        self._handle_vault_open_values(
+            vault_name,
+            password,
+            confirm_password,
+            mode,
+            retry_on_error=True,
+        )
+
+    def _handle_vault_open_values(
+        self,
+        vault_name: str,
+        password: str,
+        confirm_password: str,
+        mode: str,
+        *,
+        retry_on_error: bool,
+    ) -> None:
         self.vault_name = vault_name
         self.service = self.service_factory(vault_name)
         self.settings = AppSettings(vault_path=self.service.store.path)
         self.profile_settings = load_profile_settings(self.profile_base_dir, vault_name)
         self._apply_auto_lock_settings()
         if not password:
-            QMessageBox.warning(self, "信息不完整", "保险箱密码需要填写。")
-            QTimer.singleShot(0, self._open_vault)
+            self._show_login_error(
+                "信息不完整",
+                "保险箱密码需要填写。",
+                retry_on_error=retry_on_error,
+            )
             return
         if mode == VaultOpenMode.REGISTER.value:
             if self.service.vault_exists():
-                QMessageBox.warning(self, "保险箱已存在", "这个保险箱ID已经注册，请直接打开。")
-                QTimer.singleShot(0, self._open_vault)
+                self._show_login_error(
+                    "保险箱已存在",
+                    "这个保险箱ID已经注册，请直接打开。",
+                    retry_on_error=retry_on_error,
+                )
                 return
             if password != confirm_password:
-                QMessageBox.warning(self, "两次密码不一致", "请重新确认保险箱密码。")
-                QTimer.singleShot(0, self._open_vault)
+                self._show_login_error(
+                    "两次密码不一致",
+                    "请重新确认保险箱密码。",
+                    retry_on_error=retry_on_error,
+                )
                 return
             self.service.initialize(password)
         elif self.service.vault_exists():
             result = try_unlock(self.service, password)
             if not result.ok:
-                QMessageBox.warning(self, "无法打开保险箱", result.message)
-                QTimer.singleShot(0, self._open_vault)
+                self._show_login_error(
+                    "无法打开保险箱",
+                    result.message,
+                    retry_on_error=retry_on_error,
+                )
                 return
         else:
-            QMessageBox.warning(self, "保险箱不存在", "这个保险箱ID还没有注册，请先注册保险箱。")
-            QTimer.singleShot(0, self._open_vault)
+            self._show_login_error(
+                "保险箱不存在",
+                "这个保险箱ID还没有注册，请先注册保险箱。",
+                retry_on_error=retry_on_error,
+            )
             return
         self._apply_auto_lock_settings()
         self.vault_subtitle.setText(f"保险箱ID：{self.vault_name}")
+        self.login_password.clear()
+        self.login_confirm_password.clear()
+        self.login_status.setText("")
+        self._set_login_mode(VaultOpenMode.OPEN)
         self._refresh_settings_view()
         self._reset_module_pages()
         self._show_accounts_list_page()
@@ -1246,6 +1431,60 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentWidget(self.download_history_page)
         self._refresh_download_history()
 
+    def _show_login_page(self) -> None:
+        self.pages.setCurrentWidget(self.login_page)
+        self.active_nav_key = ""
+
+    def _set_login_mode(self, mode: VaultOpenMode) -> None:
+        self.login_mode = mode
+        registering = mode == VaultOpenMode.REGISTER
+        self.login_confirm_label.setVisible(registering)
+        self.login_confirm_password.setVisible(registering)
+        self.login_open_button.setText("返回打开" if registering else "打开保险箱")
+        self.login_open_button.setObjectName("SubtleButton" if registering else "PrimaryButton")
+        self.login_register_button.setObjectName(
+            "PrimaryButton" if registering else "SubtleButton"
+        )
+        self.login_vault_name.setPlaceholderText(
+            "设置保险箱ID" if registering else "输入保险箱ID"
+        )
+        self.login_password.setPlaceholderText(
+            "设置保险箱密码" if registering else "输入保险箱密码"
+        )
+        self._refresh_button_style(self.login_open_button)
+        self._refresh_button_style(self.login_register_button)
+
+    def _open_vault_from_login(self) -> None:
+        if self.login_mode == VaultOpenMode.REGISTER:
+            self._set_login_mode(VaultOpenMode.OPEN)
+            return
+        self._handle_vault_open_values(
+            self.login_vault_name.text().strip() or DEFAULT_VAULT_ID,
+            self.login_password.text(),
+            self.login_confirm_password.text(),
+            VaultOpenMode.OPEN.value,
+            retry_on_error=False,
+        )
+
+    def _register_vault_from_login(self) -> None:
+        if self.login_mode == VaultOpenMode.OPEN:
+            self._set_login_mode(VaultOpenMode.REGISTER)
+            return
+        self._handle_vault_open_values(
+            self.login_vault_name.text().strip() or DEFAULT_VAULT_ID,
+            self.login_password.text(),
+            self.login_confirm_password.text(),
+            VaultOpenMode.REGISTER.value,
+            retry_on_error=False,
+        )
+
+    def _show_login_error(self, title: str, message: str, *, retry_on_error: bool) -> None:
+        if retry_on_error:
+            QMessageBox.warning(self, title, message)
+            QTimer.singleShot(0, self._open_vault)
+            return
+        self.login_status.setText(message)
+
     def _show_download_history_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("下载历史")
@@ -1261,13 +1500,17 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("MutedText")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
-        clear = QPushButton("清空列表")
-        clear.setObjectName("DangerButton")
-        clear.setMinimumWidth(98)
+        multi_select = QPushButton("多选")
+        multi_select.setObjectName("SubtleButton")
+        multi_select.setMinimumWidth(76)
+        delete_file = QPushButton("删除文件")
+        delete_file.setObjectName("DangerButton")
+        delete_file.setMinimumWidth(98)
         close = QPushButton("关闭")
         close.setObjectName("SubtleButton")
         header.addLayout(title_box, 1)
-        header.addWidget(clear)
+        header.addWidget(multi_select)
+        header.addWidget(delete_file)
         header.addWidget(close)
         list_widget = QListWidget()
         list_widget.setObjectName("RecordList")
@@ -1277,14 +1520,14 @@ class MainWindow(QMainWindow):
         status.setObjectName("DataStatus")
         status.setWordWrap(True)
         actions = QHBoxLayout()
-        open_record = QPushButton("打开文件")
-        open_record.setObjectName("PrimaryButton")
-        open_record.setMinimumWidth(100)
+        open_folder = QPushButton("打开文件夹")
+        open_folder.setObjectName("PrimaryButton")
+        open_folder.setMinimumWidth(100)
         remove_record = QPushButton("清除记录")
         remove_record.setObjectName("SubtleButton")
         remove_record.setMinimumWidth(100)
         actions.addStretch()
-        actions.addWidget(open_record)
+        actions.addWidget(open_folder)
         actions.addWidget(remove_record)
         layout.addLayout(header)
         layout.addWidget(list_widget, 1)
@@ -1320,6 +1563,17 @@ class MainWindow(QMainWindow):
                 list_widget.addItem(item)
                 list_widget.setItemWidget(item, RecordListItem(summary, subtitle_text))
 
+        def selected_items() -> list[QListWidgetItem]:
+            return self._selected_items(list_widget)
+
+        def selected_records():
+            records = []
+            for item in selected_items():
+                record = self._download_history_record_from_item(item)
+                if record is not None:
+                    records.append(record)
+            return records
+
         def selected_record():
             item = list_widget.currentItem()
             if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
@@ -1330,22 +1584,46 @@ class MainWindow(QMainWindow):
                 None,
             )
 
-        def open_selected() -> None:
-            record = selected_record()
+        def open_record_item(item: QListWidgetItem) -> None:
+            if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
+                return
+            record = self._download_history_record_from_item(item)
             if record is None:
                 return
             self._open_local_path(record.saved_path, status)
 
-        def remove_selected() -> None:
-            record = selected_record()
-            if record is None:
+        def toggle_multi_select() -> None:
+            multi_enabled = (
+                list_widget.selectionMode()
+                != QAbstractItemView.SelectionMode.MultiSelection
+            )
+            list_widget.setSelectionMode(
+                QAbstractItemView.SelectionMode.MultiSelection
+                if multi_enabled
+                else QAbstractItemView.SelectionMode.SingleSelection
+            )
+            multi_select.setText("取消多选" if multi_enabled else "多选")
+            self._refresh_button_style(multi_select)
+
+        def delete_selected_files() -> None:
+            records = selected_records()
+            if not records:
+                status.setText("请先选择下载记录")
                 return
-            self.service.delete_download_history_record(record.id)
+            message = self._delete_download_history_files(records)
             self._refresh_download_history()
             refresh()
+            status.setText(message)
 
-        def clear_all() -> None:
-            self.service.clear_download_history()
+        def remove_selected() -> None:
+            records = selected_records()
+            if not records:
+                record = selected_record()
+                records = [record] if record is not None else []
+            if not records:
+                return
+            for record in records:
+                self.service.delete_download_history_record(record.id)
             self._refresh_download_history()
             refresh()
 
@@ -1357,9 +1635,11 @@ class MainWindow(QMainWindow):
                 status,
             )
         )
-        open_record.clicked.connect(open_selected)
+        list_widget.itemDoubleClicked.connect(open_record_item)
+        multi_select.clicked.connect(toggle_multi_select)
+        delete_file.clicked.connect(delete_selected_files)
+        open_folder.clicked.connect(self._open_transfer_download_folder)
         remove_record.clicked.connect(remove_selected)
-        clear.clicked.connect(clear_all)
         close.clicked.connect(dialog.close)
         refresh()
         self.download_history_dialog = dialog
@@ -1423,6 +1703,23 @@ class MainWindow(QMainWindow):
         self.profile_settings.backup_dir = directory
         save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
         self._refresh_settings_view()
+
+    def _choose_transfer_download_dir(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "选择传输助手默认下载位置",
+            str(self.settings.transfer_download_dir),
+        )
+        if not directory:
+            return
+        self.settings = AppSettings(
+            vault_path=self.settings.vault_path,
+            auto_lock_seconds=self.settings.auto_lock_seconds,
+            clipboard_clear_seconds=self.settings.clipboard_clear_seconds,
+            transfer_download_dir=Path(directory),
+        )
+        self._refresh_settings_view()
+        self._show_toast("已更新默认下载位置")
 
     def _sync_current_vault(self) -> None:
         if not self.profile_settings.backup_dir:
@@ -1673,10 +1970,12 @@ class MainWindow(QMainWindow):
         if active_conversation is not None:
             self.current_transfer_id = active_conversation.id
             link_text = self._current_transfer_link_text()
+            self.transfer_connect_type_value.setText("当前已有进行中的手机会话")
             self.transfer_connect_url_value.setText(
                 link_text or "当前会话已存在，请进入对话继续使用"
             )
             self.transfer_connect_code_value.setText("已有进行中的会话")
+            self._clear_trusted_transfer_link()
             status = "已有进行中的手机会话，可进入当前对话"
             if link_text:
                 status = f"{status}或复制连接。"
@@ -1695,14 +1994,42 @@ class MainWindow(QMainWindow):
         self.transfer_status.setText("")
         self.transfer_status.setVisible(False)
         self.current_transfer_id = ""
+        self.transfer_connect_mode = "browser"
+        self.transfer_trusted_device_name = ""
+        self.transfer_connect_type_value.setText("给未信任或首次连接的手机使用")
         self.transfer_connect_url_value.setText(self.transfer_server.display_url)
-        self.transfer_connect_code_value.setText("等待手机打开链接")
-        self.transfer_connect_status.setText("手机打开连接链接后会自动进入对话。")
+        self.transfer_connect_code_value.setText(
+            f"验证码：{self.transfer_server.verification_code}"
+        )
+        self.transfer_connect_status.setText(
+            "复制新手机链接，发到手机浏览器打开；手机输入验证码后才会创建对话。"
+        )
+        self._clear_trusted_transfer_link()
         self._refresh_trusted_transfer_devices()
         self._remember_module_page("transfer", self.transfer_connect_page)
         self._set_nav("transfer")
         self.pages.setCurrentWidget(self.transfer_connect_page)
         self.transfer_pair_timer.start()
+
+    def _clear_trusted_transfer_link(self) -> None:
+        self.transfer_trusted_link_title.setText("可信设备链接")
+        self.transfer_trusted_link_title.setVisible(False)
+        self.transfer_trusted_link_value.setText("")
+        self.transfer_trusted_link_value.setVisible(False)
+        self.transfer_trusted_copy_button.setVisible(False)
+        self.transfer_trusted_status.setText(
+            "选择可信设备后，会在这里显示专用连接链接。"
+        )
+
+    def _show_trusted_transfer_link(self, device_name: str, link: str) -> None:
+        self.transfer_trusted_link_title.setText(f"可信设备：{device_name}")
+        self.transfer_trusted_link_title.setVisible(True)
+        self.transfer_trusted_link_value.setText(link)
+        self.transfer_trusted_link_value.setVisible(True)
+        self.transfer_trusted_copy_button.setVisible(True)
+        self.transfer_trusted_status.setText(
+            f"等待 {device_name} 打开可信设备链接，连接后才会创建对话。"
+        )
 
     def _start_transfer_server(self, device_name: str) -> None:
         self.transfer_server = TransferHttpServer(self.service, device_name=device_name)
@@ -1719,7 +2046,12 @@ class MainWindow(QMainWindow):
             self.transfer_pair_timer.stop()
             return
         if not self.transfer_server.paired or not self.transfer_server.conversation_id:
-            self.transfer_connect_status.setText("等待手机打开连接链接。")
+            if self.transfer_connect_mode == "trusted" and self.transfer_trusted_device_name:
+                self.transfer_trusted_status.setText(
+                    f"等待 {self.transfer_trusted_device_name} 打开可信设备链接。"
+                )
+            else:
+                self.transfer_connect_status.setText("等待手机打开新手机连接链接。")
             return
         try:
             conversation = self.service.get_transfer_conversation(
@@ -1730,7 +2062,10 @@ class MainWindow(QMainWindow):
             return
         if not self._transfer_conversation_is_open(conversation):
             self.transfer_pair_timer.stop()
-            self.transfer_connect_status.setText("此次连接已关闭。")
+            if self.transfer_connect_mode == "trusted":
+                self.transfer_trusted_status.setText("此次可信设备连接已关闭。")
+            else:
+                self.transfer_connect_status.setText("此次连接已关闭。")
             return
         self.transfer_pair_timer.stop()
         self._show_transfer_chat(conversation.id)
@@ -1753,6 +2088,7 @@ class MainWindow(QMainWindow):
         self._render_transfer_messages(conversation_id)
         self.transfer_message_input.setEnabled(writable)
         self.transfer_send_button.setEnabled(writable)
+        self.transfer_send_image_button.setEnabled(writable)
         self.transfer_send_file_button.setEnabled(writable)
         self.transfer_close_button.setVisible(writable)
         self._remember_module_page("transfer", self.transfer_chat_page)
@@ -1810,12 +2146,25 @@ class MainWindow(QMainWindow):
         self._show_transfer_chat(self.current_transfer_id)
 
     def _send_current_transfer_file(self) -> None:
+        self._send_current_transfer_local_file("选择要发送的文件")
+
+    def _send_current_transfer_image(self) -> None:
+        self._send_current_transfer_local_file(
+            "选择要发送的图片",
+            "图片文件 (*.png *.jpg *.jpeg *.webp *.gif);;所有文件 (*)",
+        )
+
+    def _send_current_transfer_local_file(
+        self,
+        title: str,
+        file_filter: str = "",
+    ) -> None:
         if not self.current_transfer_id:
             return
         conversation = self.service.get_transfer_conversation(self.current_transfer_id)
         if not self._transfer_conversation_is_open(conversation):
             return
-        filename, _ = QFileDialog.getOpenFileName(self, "选择要发送的文件")
+        filename, _ = QFileDialog.getOpenFileName(self, title, "", file_filter)
         if not filename:
             return
         source = Path(filename)
@@ -1851,7 +2200,16 @@ class MainWindow(QMainWindow):
         self.clipboard.copy(text)
         self.transfer_chat_connection.setText(f"手机访问：{text}\n链接已复制。")
         if self.pages.currentWidget() == self.transfer_connect_page:
-            self.transfer_connect_status.setText("连接链接已复制。")
+            if self.transfer_connect_mode == "trusted":
+                device_name = self.transfer_trusted_device_name or "可信设备"
+                self.transfer_trusted_status.setText(
+                    f"可信设备链接已复制，请发送给 {device_name} 打开。"
+                )
+                self._show_toast("可信设备链接已复制")
+                return
+            self.transfer_connect_status.setText(
+                "新手机连接链接已复制，请发送到手机浏览器打开，并输入电脑端验证码。"
+            )
         self._show_toast("连接链接已复制")
 
     def _current_transfer_link_text(self) -> str:
@@ -1948,11 +2306,17 @@ class MainWindow(QMainWindow):
             self._stop_transfer_server(close_conversation=True)
         self._start_transfer_server(device["name"])
         self.current_transfer_id = ""
+        self.transfer_connect_mode = "trusted"
+        self.transfer_trusted_device_name = device["name"]
         device["last_connected_at"] = _now_local()
         save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
-        self.transfer_connect_url_value.setText(self.transfer_server.display_url)
-        self.transfer_connect_code_value.setText("等待可信设备打开链接")
-        self.transfer_connect_status.setText("等待可信设备打开链接，连接后才会创建对话。")
+        self.transfer_connect_type_value.setText("给未信任或首次连接的手机使用")
+        self.transfer_connect_url_value.setText("未启动新手机连接")
+        self.transfer_connect_code_value.setText("已切换为可信设备连接")
+        self.transfer_connect_status.setText(
+            "当前正在等待可信设备连接，请使用下方可信设备专用链接。"
+        )
+        self._show_trusted_transfer_link(device["name"], self.transfer_server.display_url)
         self._refresh_trusted_transfer_devices()
         self.transfer_pair_timer.start()
         self._show_toast("已准备可信设备连接")
@@ -2470,19 +2834,25 @@ class MainWindow(QMainWindow):
         item = self.download_history_list.currentItem()
         if item is None and self.download_history_list.count() == 1:
             item = self.download_history_list.item(0)
+        self._open_download_history_item(item)
+
+    def _open_download_history_item(self, item: QListWidgetItem | None) -> None:
         if item is None or item.flags() == Qt.ItemFlag.NoItemFlags:
             return
-        record_id = item.data(Qt.ItemDataRole.UserRole)
-        record = next(
-            (entry for entry in self.service.list_download_history() if entry.id == record_id),
-            None,
-        )
+        record = self._download_history_record_from_item(item)
         if record is None:
             self.download_history_status.setText("下载记录不存在")
             return
         status = QLabel()
         self._open_local_path(record.saved_path, status)
         if status.text():
+            self.download_history_status.setText(status.text())
+
+    def _open_transfer_download_folder(self) -> None:
+        self.settings.transfer_download_dir.mkdir(parents=True, exist_ok=True)
+        status = QLabel()
+        self._open_local_path(str(self.settings.transfer_download_dir), status)
+        if status.text() and hasattr(self, "download_history_status"):
             self.download_history_status.setText(status.text())
 
     def _show_download_history_context_menu(
@@ -2503,12 +2873,17 @@ class MainWindow(QMainWindow):
         menu = QMenu(list_widget)
         open_file = menu.addAction("打开文件")
         reveal_file = menu.addAction("在资源管理器中打开")
+        delete_file = menu.addAction("删除文件")
         remove_record = menu.addAction("清除记录")
         action = menu.exec(list_widget.viewport().mapToGlobal(position))
         if action == open_file:
             self._open_local_path(record.saved_path, status)
         elif action == reveal_file:
             self._reveal_local_path(record.saved_path, status)
+        elif action == delete_file:
+            status.setText(self._delete_download_history_files([record]))
+            self._refresh_download_history()
+            refresh()
         elif action == remove_record:
             self.service.delete_download_history_record(record.id)
             self._refresh_download_history()
@@ -2520,6 +2895,46 @@ class MainWindow(QMainWindow):
             (entry for entry in self.service.list_download_history() if entry.id == record_id),
             None,
         )
+
+    def _delete_selected_download_history_files(self) -> None:
+        items = self._selected_items(self.download_history_list)
+        if not items:
+            self._show_toast("请先选择下载记录")
+            return
+        records = [
+            record
+            for item in items
+            if (record := self._download_history_record_from_item(item)) is not None
+        ]
+        message = self._delete_download_history_files(records)
+        self._exit_batch_mode("download_history", self.download_history_list)
+        self._refresh_download_history()
+        self.download_history_status.setText(message)
+        self._show_toast(message)
+
+    def _delete_download_history_files(self, records) -> str:
+        deleted = 0
+        missing = 0
+        failed = 0
+        for record in records:
+            path = Path(record.saved_path)
+            if not path.exists():
+                missing += 1
+                continue
+            try:
+                path.unlink()
+                deleted += 1
+            except OSError:
+                failed += 1
+        message = f"已删除 {deleted} 个文件"
+        details = []
+        if missing:
+            details.append(f"{missing} 个文件不存在")
+        if failed:
+            details.append(f"{failed} 个文件删除失败")
+        if details:
+            message = f"{message}，{', '.join(details)}"
+        return message
 
     def _clear_download_history(self) -> None:
         self.service.clear_download_history()
@@ -3150,7 +3565,7 @@ class MainWindow(QMainWindow):
         self.current_transfer_id = ""
         self.transfer_messages_signature = ""
         self._reset_module_pages()
-        self._open_vault()
+        self._show_login_page()
 
     def closeEvent(self, event) -> None:
         self._auto_sync_current_vault()
