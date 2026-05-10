@@ -1175,6 +1175,8 @@ def test_main_window_starts_with_embedded_login_page(qt_app) -> None:
     assert window.login_vault_name.text()
     assert window.login_password.placeholderText() == "输入保险箱密码"
     assert window.login_page.parent() is window.pages
+    assert window.login_shell.maximumWidth() >= 700
+    assert window.login_form_panel.objectName() == "LoginFormPanel"
 
     window.close()
 
@@ -1189,6 +1191,67 @@ def test_sidebar_returns_after_embedded_login_success(vault_path: Path, qt_app) 
     window.profile_base_dir = base_dir
     window.login_vault_name.setText("于祥磊")
     window.login_password.setText("wojiao321.")
+
+    window._open_vault_from_login()
+
+    assert window.pages.currentWidget() == window.accounts_page
+    assert not window.sidebar.isHidden()
+
+    window.close()
+
+
+def test_embedded_login_error_shows_status(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+
+    window.login_password.setText("")
+    window._open_vault_from_login()
+
+    assert not window.login_status.isHidden()
+    assert window.login_status.text()
+    assert window.pages.currentWidget() == window.login_page
+
+    window.close()
+
+
+def test_embedded_login_wrong_password_shows_toast(vault_path: Path, qt_app) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window.profile_base_dir = base_dir
+    window.login_vault_name.setText("于祥磊")
+    window.login_password.setText("wrong-password")
+
+    window._open_vault_from_login()
+
+    assert not window.login_status.isHidden()
+    assert window.toast_notice is not None
+    assert not window.toast_notice.isHidden()
+    assert window.toast_notice.text()
+    assert window.pages.currentWidget() == window.login_page
+
+    window.close()
+
+
+def test_remembered_password_prefills_and_opens_vault(vault_path: Path, qt_app) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window.profile_base_dir = base_dir
+    window.login_vault_name.setText("于祥磊")
+    window.login_password.setText("wojiao321.")
+    window.remember_password_check.setChecked(True)
+
+    window._open_vault_from_login()
+    window._lock()
+
+    assert window.remember_password_check.isChecked()
+    assert window.login_password.text() == "wojiao321."
 
     window._open_vault_from_login()
 
@@ -1529,8 +1592,45 @@ def test_sidebar_separates_management_nav_and_wraps_vault_summary(qt_app) -> Non
     assert window.minimumSizeHint().height() <= 720
 
     window.resize(1120, 720)
+    window.sidebar.setVisible(True)
+    window.show()
+    qt_app.processEvents()
+    transfer_bottom = window.transfer_nav.mapTo(
+        window,
+        window.transfer_nav.rect().bottomLeft(),
+    ).y()
+    trash_top = window.trash_nav.mapTo(window, window.trash_nav.rect().topLeft()).y()
     nav_bottom = window.settings_nav.mapTo(window, window.settings_nav.rect().bottomLeft()).y()
+    assert trash_top - transfer_bottom >= 120
     assert nav_bottom < window.height()
+
+    window.close()
+
+
+def test_settings_can_switch_and_persist_ui_theme(vault_path: Path, monkeypatch, qt_app) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+
+    assert window.theme_combo.currentData() == "classic"
+
+    window.theme_combo.setCurrentText("Linear Dark")
+
+    assert window.active_theme_name == "linear_dark"
+    assert "near-black graphite" in qt_app.styleSheet()
+    assert load_profile_settings(base_dir, "于祥磊").theme_name == "linear_dark"
+
+    window.theme_combo.setCurrentText("经典")
+
+    assert window.active_theme_name == "classic"
+    assert "near-black graphite" not in qt_app.styleSheet()
 
     window.close()
 

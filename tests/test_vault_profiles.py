@@ -36,6 +36,9 @@ def test_profile_settings_persist_auto_lock_seconds(tmp_path: Path) -> None:
         auto_sync_on_close=False,
         auto_lock_seconds=1200,
         transfer_download_dir="D:\\SafeBoxDownloads",
+        theme_name="linear_dark",
+        remember_password=True,
+        remembered_password="encrypted-token",
     )
 
     save_profile_settings(tmp_path, "school", settings)
@@ -45,6 +48,9 @@ def test_profile_settings_persist_auto_lock_seconds(tmp_path: Path) -> None:
     assert not loaded.auto_sync_on_close
     assert loaded.auto_lock_seconds == 1200
     assert loaded.transfer_download_dir == "D:\\SafeBoxDownloads"
+    assert loaded.theme_name == "linear_dark"
+    assert loaded.remember_password
+    assert loaded.remembered_password == "encrypted-token"
 
 
 def test_sync_vault_to_backup_uses_sync_time_for_backup_mtime(tmp_path: Path) -> None:

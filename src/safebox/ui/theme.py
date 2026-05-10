@@ -4,6 +4,13 @@ from pathlib import Path
 
 CHEVRON_DOWN_ICON = (Path(__file__).resolve().parent / "assets" / "chevron-down.svg").as_posix()
 
+THEME_CLASSIC = "classic"
+THEME_LINEAR_DARK = "linear_dark"
+THEME_LABELS = {
+    THEME_CLASSIC: "经典",
+    THEME_LINEAR_DARK: "Linear Dark",
+}
+
 
 LIGHT_FLUENT_QSS = """
 QWidget {
@@ -212,6 +219,13 @@ QLabel#SettingsLabel {
     font-size: 13px;
     font-weight: 700;
     min-width: 80px;
+}
+QLabel#SortLabel {
+    color: #475569;
+    background: transparent;
+    font-size: 13px;
+    font-weight: 700;
+    min-width: 0;
 }
 QLabel#TransferConnectInfoLabel {
     color: #475569;
@@ -538,6 +552,44 @@ QLineEdit#VaultInput {
 }
 QLineEdit#VaultInput:focus {
     border: 1px solid #3b82f6;
+}
+QPushButton#LoginPrimaryButton {
+    color: white;
+    background: #2563eb;
+    border: 1px solid #2563eb;
+    border-radius: 12px;
+    min-height: 44px;
+    font-size: 14px;
+    font-weight: 750;
+}
+QPushButton#LoginPrimaryButton:hover {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+}
+QPushButton#LoginPrimaryButton:pressed {
+    background: #1e40af;
+    border-color: #1e40af;
+    padding-top: 1px;
+}
+QPushButton#LoginSubtleButton {
+    color: #172033;
+    background: #ffffff;
+    border: 1px solid #d4deeb;
+    border-radius: 12px;
+    min-height: 44px;
+    font-size: 14px;
+    font-weight: 650;
+}
+QPushButton#LoginSubtleButton:hover {
+    color: #1d4ed8;
+    background: #eaf2ff;
+    border-color: #93c5fd;
+}
+QPushButton#LoginSubtleButton:pressed {
+    color: #1e40af;
+    background: #dbeafe;
+    border-color: #60a5fa;
+    padding-top: 1px;
 }
 QLineEdit#InlineEditor, QComboBox#InlineCombo, QComboBox#CategoryCombo {
     min-height: 64px;
@@ -896,3 +948,522 @@ QLabel#BrandMarkSmall {
     border: 0;
 }
 """.replace("__CHEVRON_DOWN_ICON__", CHEVRON_DOWN_ICON)
+
+
+LINEAR_DARK_QSS = """
+/* SafeBox near-black graphite Linear theme */
+QWidget {
+    font-family: "Segoe UI", "Microsoft YaHei";
+    color: #e5e7eb;
+    background: #0b0d12;
+}
+QMainWindow {
+    background: #0b0d12;
+}
+QDialog {
+    background: #10131a;
+}
+QToolTip {
+    color: #e5e7eb;
+    background: #171b24;
+    border: 1px solid #2b3342;
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+QFrame#Sidebar {
+    background: #0f1218;
+    border-right: 1px solid #252c38;
+}
+QFrame#ManagementNavGroup {
+    background: transparent;
+    border-top: 1px solid #252c38;
+    padding-top: 12px;
+}
+QFrame#HeaderBrand,
+QFrame#LoginIntro,
+QFrame#FieldPanel {
+    background: transparent;
+}
+QFrame#LoginShell {
+    background: transparent;
+    border: 0;
+}
+QFrame#LoginFormPanel,
+QFrame#SettingsCard,
+QFrame#FieldCard,
+QFrame#AttachmentCard {
+    background: #121620;
+    border: 1px solid #273041;
+    border-radius: 8px;
+}
+QFrame#LoginFormPanel:hover,
+QFrame#SettingsCard:hover,
+QFrame#FieldCard:hover,
+QFrame#AttachmentCard:hover {
+    border: 1px solid #38465d;
+    background: #151a25;
+}
+QFrame#DialogHero,
+QFrame#DetailHero {
+    background: #121826;
+    border: 1px solid #2e3b55;
+    border-radius: 8px;
+}
+QFrame#SettingsRow,
+QFrame#TransferConnectInfoRow {
+    background: #0f131b;
+    border: 1px solid #252d3b;
+    border-radius: 8px;
+}
+QLabel {
+    background: transparent;
+}
+QLabel#AppTitle {
+    font-size: 18px;
+    font-weight: 700;
+    color: #f8fafc;
+}
+QLabel#PageTitle {
+    font-size: 28px;
+    font-weight: 720;
+    color: #f8fafc;
+}
+QLabel#HeroTitle,
+QLabel#LoginHeadline {
+    font-size: 30px;
+    font-weight: 720;
+    color: #f8fafc;
+}
+QLabel#LoginHeadline {
+    font-size: 36px;
+}
+QLabel#DialogTitle {
+    font-size: 24px;
+    font-weight: 720;
+    color: #f8fafc;
+}
+QLabel#HeroMeta {
+    font-size: 15px;
+    color: #7dd3fc;
+}
+QLabel#MutedText,
+QLabel#SettingsCardHint,
+QLabel#RecordSubtitle,
+QLabel#TransferBubbleMeta {
+    color: #94a3b8;
+}
+QLabel#SettingsCardTitle,
+QLabel#RecordTitle {
+    color: #f8fafc;
+    font-size: 18px;
+    font-weight: 720;
+}
+QLabel#SettingsLabel,
+QLabel#TransferConnectInfoLabel,
+QLabel#FieldLabel {
+    color: #9ca3af;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLabel#SortLabel {
+    color: #9ca3af;
+    background: transparent;
+    font-size: 13px;
+    font-weight: 700;
+    min-width: 0;
+}
+QLabel#SettingsValue,
+QLabel#FieldContent,
+QLabel#TransferBubbleText,
+QLabel#AttachmentInfo {
+    color: #e5e7eb;
+    background: transparent;
+}
+QLabel#FieldContent {
+    font-size: 19px;
+    font-weight: 650;
+    background: #0f131b;
+    border: 1px solid #252d3b;
+    border-radius: 8px;
+    padding: 0 14px;
+    min-height: 64px;
+}
+QLabel#DataStatus,
+QLabel#TransferConnectStatus {
+    color: #cbd5e1;
+    background: #111827;
+    border: 1px solid #2b3342;
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+QLabel#SuccessNotice,
+QLabel#ToastNotice {
+    color: #bbf7d0;
+    background: #052e1a;
+    border: 1px solid #166534;
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-weight: 700;
+}
+QLabel#EmptyTitle {
+    color: #94a3b8;
+    font-size: 16px;
+    font-weight: 700;
+}
+QLabel#SectionLabel {
+    color: #d1d5db;
+    font-size: 15px;
+    font-weight: 700;
+}
+QPushButton {
+    min-height: 36px;
+    padding: 0 15px;
+    border-radius: 8px;
+    border: 1px solid #303949;
+    background: #141923;
+    color: #e5e7eb;
+}
+QPushButton:hover {
+    background: #1a2230;
+    border-color: #3b82f6;
+}
+QPushButton:pressed {
+    background: #111827;
+    padding-top: 1px;
+}
+QPushButton#PrimaryButton,
+QPushButton#SyncNowButton {
+    color: #ffffff;
+    background: #2563eb;
+    border: 1px solid #3b82f6;
+    font-weight: 700;
+}
+QPushButton#PrimaryButton:hover,
+QPushButton#SyncNowButton:hover {
+    background: #1d4ed8;
+    border-color: #60a5fa;
+}
+QPushButton#PrimaryButton:pressed,
+QPushButton#SyncNowButton:pressed {
+    background: #1e40af;
+    padding-top: 1px;
+}
+QPushButton#SubtleButton {
+    color: #dbeafe;
+    background: #121826;
+    border: 1px solid #2e3b55;
+}
+QPushButton#SubtleButton:hover {
+    color: #ffffff;
+    background: #172033;
+    border-color: #3b82f6;
+}
+QPushButton#DangerButton {
+    color: #ffffff;
+    background: #991b1b;
+    border: 1px solid #b91c1c;
+    font-weight: 700;
+}
+QPushButton#DangerButton:hover {
+    background: #b91c1c;
+}
+QPushButton#NavButton,
+QPushButton#NavButtonActive {
+    min-height: 42px;
+    text-align: left;
+    padding-left: 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #cbd5e1;
+}
+QPushButton#NavButton:hover {
+    background: #151b27;
+    border-color: #293347;
+}
+QPushButton#NavButtonActive {
+    color: #ffffff;
+    background: #172033;
+    border: 1px solid #3b82f6;
+    font-weight: 700;
+}
+QPushButton#FormatButton,
+QPushButton#FormatButtonWide {
+    min-height: 32px;
+    border-radius: 7px;
+    background: #121826;
+    border: 1px solid #2e3b55;
+    font-weight: 700;
+}
+QLineEdit,
+QTextEdit,
+QPlainTextEdit,
+QComboBox,
+QSpinBox#MinuteSpinBox {
+    min-height: 36px;
+    border-radius: 8px;
+    border: 1px solid #303949;
+    background: #10141d;
+    color: #e5e7eb;
+    padding: 7px 11px;
+    font-size: 14px;
+    selection-background-color: #2563eb;
+}
+QLineEdit:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus,
+QComboBox:focus,
+QSpinBox#MinuteSpinBox:focus {
+    border: 1px solid #3b82f6;
+}
+QLineEdit#VaultInput {
+    min-height: 54px;
+    border-radius: 8px;
+    padding: 0 16px;
+    font-size: 17px;
+    border: 1px solid #303949;
+    background: #0f131b;
+}
+QPushButton#LoginPrimaryButton {
+    color: #ffffff;
+    background: #2563eb;
+    border: 1px solid #3b82f6;
+    border-radius: 8px;
+    min-height: 44px;
+    font-size: 14px;
+    font-weight: 750;
+}
+QPushButton#LoginPrimaryButton:hover {
+    background: #1d4ed8;
+    border-color: #60a5fa;
+}
+QPushButton#LoginPrimaryButton:pressed {
+    background: #1e40af;
+    padding-top: 1px;
+}
+QPushButton#LoginSubtleButton {
+    color: #dbeafe;
+    background: #121826;
+    border: 1px solid #2e3b55;
+    border-radius: 8px;
+    min-height: 44px;
+    font-size: 14px;
+    font-weight: 650;
+}
+QPushButton#LoginSubtleButton:hover {
+    color: #ffffff;
+    background: #172033;
+    border-color: #3b82f6;
+}
+QPushButton#LoginSubtleButton:pressed {
+    background: #111827;
+    padding-top: 1px;
+}
+QLabel#VaultFormLabel {
+    color: #d1d5db;
+    background: transparent;
+    font-size: 15px;
+    font-weight: 650;
+    min-height: 54px;
+    qproperty-alignment: AlignVCenter;
+}
+QLineEdit#InlineEditor,
+QComboBox#InlineCombo,
+QComboBox#CategoryCombo,
+QLabel#FieldContent {
+    min-height: 64px;
+    font-size: 17px;
+    font-weight: 650;
+    border-radius: 8px;
+    background: #0f131b;
+    border: 1px solid #303949;
+}
+QComboBox {
+    padding-right: 38px;
+}
+QComboBox::drop-down {
+    width: 32px;
+    border: 0;
+    border-left: 1px solid #252d3b;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    background: #121826;
+}
+QComboBox::down-arrow {
+    image: url(__CHEVRON_DOWN_ICON__);
+    width: 14px;
+    height: 14px;
+    margin-right: 9px;
+}
+QComboBox QAbstractItemView {
+    outline: 0;
+    border: 1px solid #303949;
+    border-radius: 8px;
+    background: #111827;
+    color: #e5e7eb;
+    selection-background-color: #1d4ed8;
+    selection-color: #ffffff;
+    padding: 6px;
+}
+QTextEdit#DetailNote,
+QTextEdit#TransferMessageInput,
+QTextEdit#NoteBody {
+    background: #0f131b;
+    border: 1px solid #303949;
+    border-radius: 8px;
+    color: #e5e7eb;
+}
+QListWidget {
+    border: 0;
+    background: transparent;
+}
+QListWidget#RecordList {
+    border-radius: 8px;
+}
+QListWidget#TransferMessageList {
+    background: #0f131b;
+    border: 1px solid #303949;
+    border-radius: 8px;
+    padding: 8px;
+}
+QListWidget::item {
+    min-height: 62px;
+    padding: 0;
+    border-radius: 8px;
+}
+QListWidget::item:hover {
+    background: #151b27;
+    border: 1px solid #293347;
+}
+QListWidget::item:selected {
+    background: #172033;
+    border: 1px solid #3b82f6;
+    color: #ffffff;
+}
+QFrame#TransferBubbleDesktop {
+    background: #14301f;
+    border: 1px solid #1f5f37;
+    border-radius: 8px;
+}
+QFrame#TransferBubblePhone {
+    background: #121826;
+    border: 1px solid #303949;
+    border-radius: 8px;
+}
+QMenu {
+    background: #111827;
+    border: 1px solid #303949;
+    border-radius: 8px;
+    padding: 5px;
+}
+QMenu::item {
+    min-height: 30px;
+    padding: 6px 34px 6px 28px;
+    border-radius: 6px;
+    color: #e5e7eb;
+}
+QMenu::item:selected {
+    background: #1d4ed8;
+    color: #ffffff;
+}
+QScrollArea#PageScroll,
+QScrollArea#PageScroll > QWidget,
+QWidget#AttachmentScrollContent,
+QScrollArea#AttachmentScroll {
+    border: 0;
+    background: transparent;
+}
+QLabel#CategoryBadge_Blue,
+QLabel#CategoryBadge_Pink,
+QLabel#CategoryBadge_Cyan,
+QLabel#CategoryBadge_Mint,
+QLabel#CategoryBadge_Lavender,
+QLabel#CategoryBadge_Peach,
+QLabel#CategoryBadge_Sky {
+    min-height: 30px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 750;
+}
+QLabel#CategoryBadge_Blue { color: #bfdbfe; background: #172554; }
+QLabel#CategoryBadge_Pink { color: #fbcfe8; background: #500724; }
+QLabel#CategoryBadge_Cyan { color: #a5f3fc; background: #164e63; }
+QLabel#CategoryBadge_Mint { color: #bbf7d0; background: #14532d; }
+QLabel#CategoryBadge_Lavender { color: #ddd6fe; background: #3b0764; }
+QLabel#CategoryBadge_Peach { color: #fed7aa; background: #7c2d12; }
+QLabel#CategoryBadge_Sky { color: #bae6fd; background: #0c4a6e; }
+QComboBox#CategoryPillCombo_Blue,
+QComboBox#CategoryPillCombo_Pink,
+QComboBox#CategoryPillCombo_Cyan,
+QComboBox#CategoryPillCombo_Mint,
+QComboBox#CategoryPillCombo_Lavender,
+QComboBox#CategoryPillCombo_Peach,
+QComboBox#CategoryPillCombo_Sky {
+    min-width: 118px;
+    max-width: 150px;
+    min-height: 36px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 750;
+    padding: 5px 34px 5px 14px;
+}
+QComboBox#CategoryPillCombo_Blue { color: #bfdbfe; background: #172554; border: 1px solid #1d4ed8; }
+QComboBox#CategoryPillCombo_Pink { color: #fbcfe8; background: #500724; border: 1px solid #be185d; }
+QComboBox#CategoryPillCombo_Cyan { color: #a5f3fc; background: #164e63; border: 1px solid #0891b2; }
+QComboBox#CategoryPillCombo_Mint { color: #bbf7d0; background: #14532d; border: 1px solid #15803d; }
+QComboBox#CategoryPillCombo_Lavender {
+    color: #ddd6fe;
+    background: #3b0764;
+    border: 1px solid #7e22ce;
+}
+QComboBox#CategoryPillCombo_Peach {
+    color: #fed7aa;
+    background: #7c2d12;
+    border: 1px solid #c2410c;
+}
+QComboBox#CategoryPillCombo_Sky { color: #bae6fd; background: #0c4a6e; border: 1px solid #0284c7; }
+QPushButton#ColorButtonBlack,
+QPushButton#ColorButtonBlue,
+QPushButton#ColorButtonPink,
+QPushButton#ColorButtonGreen,
+QPushButton#ColorButtonOrange {
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
+    border-radius: 8px;
+    padding: 0;
+    border: 2px solid #0b0d12;
+}
+QPushButton#ColorButtonBlack { background: #e5e7eb; }
+QPushButton#ColorButtonBlue { background: #60a5fa; }
+QPushButton#ColorButtonPink { background: #f472b6; }
+QPushButton#ColorButtonGreen { background: #34d399; }
+QPushButton#ColorButtonOrange { background: #fb923c; }
+QLabel#AttachmentThumb,
+QLabel#AttachmentFileIcon,
+QLabel#TransferImagePreview {
+    background: #0f131b;
+    border: 1px solid #303949;
+    border-radius: 8px;
+    color: #94a3b8;
+    font-weight: 700;
+}
+QLabel#AttachmentFileIcon {
+    color: #bfdbfe;
+    background: #172554;
+}
+""".replace("__CHEVRON_DOWN_ICON__", CHEVRON_DOWN_ICON)
+
+
+def normalize_theme_name(theme_name: str) -> str:
+    return theme_name if theme_name in THEME_LABELS else THEME_CLASSIC
+
+
+def stylesheet_for_theme(theme_name: str) -> str:
+    if normalize_theme_name(theme_name) == THEME_LINEAR_DARK:
+        return LINEAR_DARK_QSS
+    return LIGHT_FLUENT_QSS

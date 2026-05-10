@@ -53,6 +53,7 @@ from safebox.core.record_sorting import (
     SortMode,
     sorted_summaries,
 )
+from safebox.core.remembered_password import protect_password, unprotect_password
 from safebox.core.services import try_unlock
 from safebox.core.settings import AppSettings
 from safebox.core.transfer import (
@@ -80,6 +81,7 @@ from safebox.ui.dialogs import (
     VaultOpenDialog,
     VaultOpenMode,
 )
+from safebox.ui.theme import THEME_LABELS, normalize_theme_name, stylesheet_for_theme
 
 FORMAT_BRUSH_ICON_PATH = Path(__file__).resolve().parent / "assets" / "format-brush.svg"
 AUTO_LOCK_PRESETS = {
@@ -98,6 +100,7 @@ class MainWindow(QMainWindow):
         self.vault_name = DEFAULT_VAULT_ID
         self.profile_base_dir = app_data_dir()
         self.profile_settings = VaultProfileSettings()
+        self.active_theme_name = "classic"
         self.service = self.service_factory(self.vault_name)
         self.settings = AppSettings(vault_path=self.service.store.path)
         self.clipboard = SecureClipboard(self.settings.clipboard_clear_seconds)
@@ -199,8 +202,8 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(self.accounts_nav)
         side_layout.addWidget(self.notes_nav)
         side_layout.addWidget(self.transfer_nav)
-        side_layout.addWidget(management_nav)
         side_layout.addStretch()
+        side_layout.addWidget(management_nav)
         side_layout.addSpacing(12)
         side_layout.addWidget(lock)
 
@@ -251,8 +254,11 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(28, 28, 28, 28)
         outer.addStretch()
         shell = QFrame()
-        shell.setObjectName("DialogHero")
-        shell.setMaximumWidth(640)
+        self.login_shell = shell
+        self.login_form_panel = shell
+        shell.setObjectName("LoginFormPanel")
+        shell.setMaximumWidth(760)
+        shell.setMinimumWidth(640)
         layout = QVBoxLayout(shell)
         layout.setContentsMargins(28, 28, 28, 24)
         layout.setSpacing(16)
@@ -291,14 +297,17 @@ class MainWindow(QMainWindow):
         self.login_confirm_label = QLabel("确认密码")
         self.login_confirm_label.setObjectName("VaultFormLabel")
         self.login_confirm_label.setVisible(False)
+        self.remember_password_check = QCheckBox("记住密码")
+        self.remember_password_check.setObjectName("RememberPasswordCheck")
         self.login_status = QLabel("")
         self.login_status.setObjectName("DataStatus")
         self.login_status.setWordWrap(True)
+        self.login_status.setVisible(False)
         self.login_mode = VaultOpenMode.OPEN
         self.login_open_button = QPushButton("打开保险箱")
-        self.login_open_button.setObjectName("PrimaryButton")
+        self.login_open_button.setObjectName("LoginPrimaryButton")
         self.login_register_button = QPushButton("注册保险箱")
-        self.login_register_button.setObjectName("SubtleButton")
+        self.login_register_button.setObjectName("LoginSubtleButton")
 
         form = QGridLayout()
         form.setHorizontalSpacing(14)
@@ -315,10 +324,14 @@ class MainWindow(QMainWindow):
         form.addWidget(self.login_password, 1, 1)
         form.addWidget(self.login_confirm_label, 2, 0)
         form.addWidget(self.login_confirm_password, 2, 1)
+        form.addWidget(self.remember_password_check, 3, 1)
         actions = QHBoxLayout()
-        actions.setSpacing(10)
-        actions.addWidget(self.login_open_button, 1)
-        actions.addWidget(self.login_register_button, 1)
+        actions.setContentsMargins(104, 2, 0, 0)
+        actions.setSpacing(12)
+        self.login_open_button.setMinimumWidth(230)
+        self.login_register_button.setMinimumWidth(150)
+        actions.addWidget(self.login_open_button, 3)
+        actions.addWidget(self.login_register_button, 2)
 
         layout.addWidget(self.login_brand_mark, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(title)
@@ -333,6 +346,7 @@ class MainWindow(QMainWindow):
         self.login_register_button.clicked.connect(self._register_vault_from_login)
         self.login_password.returnPressed.connect(self._open_vault_from_login)
         self.login_confirm_password.returnPressed.connect(self._register_vault_from_login)
+        self.login_vault_name.editingFinished.connect(self._load_remembered_password_for_login)
         return page
 
     def _build_accounts_page(self) -> QWidget:
@@ -340,6 +354,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(28, 24, 28, 24)
         header = QHBoxLayout()
+        header.setSpacing(10)
         title = QLabel("账号密码")
         title.setObjectName("PageTitle")
         add = QPushButton("+ 新建账号")
@@ -355,13 +370,10 @@ class MainWindow(QMainWindow):
         self.account_status.setVisible(False)
         self.account_search = QLineEdit()
         self.account_search.setPlaceholderText("搜索名称、账号、分类、备注")
-        account_tools = QHBoxLayout()
         self.account_sort = QComboBox()
         self.account_sort.setObjectName("SortCombo")
         self._populate_sort_combo(self.account_sort)
-        account_tools.addStretch()
-        account_tools.addWidget(QLabel("排序"))
-        account_tools.addWidget(self.account_sort)
+        account_sort_group = self._sort_control_group(self.account_sort)
         self.account_list = QListWidget()
         self.account_list.setObjectName("RecordList")
         self.account_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -370,10 +382,10 @@ class MainWindow(QMainWindow):
         header.addStretch()
         header.addWidget(self.account_multi_button)
         header.addWidget(self.account_delete_selected_button)
+        header.addWidget(account_sort_group)
         header.addWidget(add)
         layout.addLayout(header)
         layout.addWidget(self.account_status)
-        layout.addLayout(account_tools)
         layout.addWidget(self.account_search)
         layout.addWidget(self.account_list, 1)
 
@@ -453,6 +465,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(28, 24, 28, 24)
         header = QHBoxLayout()
+        header.setSpacing(10)
         title = QLabel("小纸条")
         title.setObjectName("PageTitle")
         add = QPushButton("+ 新建小纸条")
@@ -471,13 +484,10 @@ class MainWindow(QMainWindow):
         self.note_status.setVisible(False)
         self.note_search = QLineEdit()
         self.note_search.setPlaceholderText("搜索标题、分类、内容")
-        note_tools = QHBoxLayout()
         self.note_sort = QComboBox()
         self.note_sort.setObjectName("SortCombo")
         self._populate_sort_combo(self.note_sort)
-        note_tools.addStretch()
-        note_tools.addWidget(QLabel("排序"))
-        note_tools.addWidget(self.note_sort)
+        note_sort_group = self._sort_control_group(self.note_sort)
         self.note_list = QListWidget()
         self.note_list.setObjectName("RecordList")
         self.note_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -486,11 +496,11 @@ class MainWindow(QMainWindow):
         header.addStretch()
         header.addWidget(self.note_multi_button)
         header.addWidget(self.note_delete_selected_button)
+        header.addWidget(note_sort_group)
         header.addWidget(import_file)
         header.addWidget(add)
         layout.addLayout(header)
         layout.addWidget(self.note_status)
-        layout.addLayout(note_tools)
         layout.addWidget(self.note_search)
         layout.addWidget(self.note_list, 1)
 
@@ -1088,6 +1098,10 @@ class MainWindow(QMainWindow):
         self.auto_lock_combo.addItems(("5分钟", "20分钟", "自定义", "从不锁定"))
         self.auto_lock_combo.setObjectName("SortCombo")
         self.custom_auto_lock_minutes = QSpinBox()
+        self.theme_combo = QComboBox()
+        self.theme_combo.setObjectName("SortCombo")
+        for theme_name, label in THEME_LABELS.items():
+            self.theme_combo.addItem(label, theme_name)
         self.custom_auto_lock_minutes.setRange(1, 24 * 60)
         self.custom_auto_lock_minutes.setSuffix(" 分钟")
         self.custom_auto_lock_minutes.setObjectName("MinuteSpinBox")
@@ -1129,6 +1143,23 @@ class MainWindow(QMainWindow):
         transfer_actions.addStretch()
         transfer_card.layout().addLayout(transfer_actions)
         layout.addWidget(transfer_card)
+        appearance_card = self._settings_card(
+            "界面",
+            "经典主题保持现有外观，Linear Dark 按 DESIGN.md 的深色工作台风格重新设计。",
+            (),
+        )
+        theme_row = QFrame()
+        theme_row.setObjectName("SettingsRow")
+        theme_layout = QHBoxLayout(theme_row)
+        theme_layout.setContentsMargins(12, 10, 12, 10)
+        theme_layout.setSpacing(12)
+        theme_label = QLabel("主题")
+        theme_label.setObjectName("SettingsLabel")
+        theme_layout.addWidget(theme_label)
+        theme_layout.addWidget(self.theme_combo)
+        theme_layout.addStretch()
+        appearance_card.layout().addWidget(theme_row)
+        layout.addWidget(appearance_card)
         security_card = self._settings_card(
             "安全",
             "控制自动同步和保险箱密码。",
@@ -1162,6 +1193,7 @@ class MainWindow(QMainWindow):
         self.auto_sync_check.toggled.connect(self._set_auto_sync_on_close)
         self.auto_lock_combo.currentTextChanged.connect(self._set_auto_lock_mode)
         self.custom_auto_lock_minutes.valueChanged.connect(self._set_custom_auto_lock_minutes)
+        self.theme_combo.currentIndexChanged.connect(self._set_theme_from_settings)
         change_password.clicked.connect(self._change_master_password)
         scroll.setWidget(content)
         page_layout.addWidget(scroll)
@@ -1263,6 +1295,20 @@ class MainWindow(QMainWindow):
             layout.addWidget(row)
         return card
 
+    def _sort_control_group(self, combo: QComboBox) -> QWidget:
+        group = QWidget()
+        group.setObjectName("SortControlGroup")
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        label = QLabel("排序")
+        label.setObjectName("SortLabel")
+        label.setMinimumWidth(0)
+        combo.setMinimumWidth(160)
+        layout.addWidget(label)
+        layout.addWidget(combo)
+        return group
+
     def _open_vault(self) -> None:
         dialog = VaultOpenDialog(self)
         if not dialog.exec():
@@ -1290,6 +1336,7 @@ class MainWindow(QMainWindow):
         self.service = self.service_factory(vault_name)
         self.settings = AppSettings(vault_path=self.service.store.path)
         self.profile_settings = load_profile_settings(self.profile_base_dir, vault_name)
+        self._apply_theme(normalize_theme_name(self.profile_settings.theme_name))
         self._apply_profile_download_dir()
         self._apply_auto_lock_settings()
         if not password:
@@ -1333,9 +1380,11 @@ class MainWindow(QMainWindow):
             return
         self._apply_auto_lock_settings()
         self.vault_subtitle.setText(f"保险箱ID：{self.vault_name}")
+        self._save_remembered_password(password)
         self.login_password.clear()
         self.login_confirm_password.clear()
         self.login_status.setText("")
+        self.login_status.setVisible(False)
         self._set_login_mode(VaultOpenMode.OPEN)
         self._refresh_settings_view()
         self._reset_module_pages()
@@ -1446,6 +1495,7 @@ class MainWindow(QMainWindow):
 
     def _show_login_page(self) -> None:
         self.sidebar.setVisible(False)
+        self._load_remembered_password_for_login()
         self.pages.setCurrentWidget(self.login_page)
         self.active_nav_key = ""
 
@@ -1455,9 +1505,11 @@ class MainWindow(QMainWindow):
         self.login_confirm_label.setVisible(registering)
         self.login_confirm_password.setVisible(registering)
         self.login_open_button.setText("返回打开" if registering else "打开保险箱")
-        self.login_open_button.setObjectName("SubtleButton" if registering else "PrimaryButton")
+        self.login_open_button.setObjectName(
+            "LoginSubtleButton" if registering else "LoginPrimaryButton"
+        )
         self.login_register_button.setObjectName(
-            "PrimaryButton" if registering else "SubtleButton"
+            "LoginPrimaryButton" if registering else "LoginSubtleButton"
         )
         self.login_vault_name.setPlaceholderText(
             "设置保险箱ID" if registering else "输入保险箱ID"
@@ -1467,6 +1519,9 @@ class MainWindow(QMainWindow):
         )
         self._refresh_button_style(self.login_open_button)
         self._refresh_button_style(self.login_register_button)
+        self.login_status.setText("")
+        self.login_status.setVisible(False)
+        self.remember_password_check.setVisible(not registering)
 
     def _open_vault_from_login(self) -> None:
         if self.login_mode == VaultOpenMode.REGISTER:
@@ -1498,6 +1553,35 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._open_vault)
             return
         self.login_status.setText(message)
+        self.login_status.setVisible(True)
+        self._show_toast(message)
+
+    def _load_remembered_password_for_login(self) -> None:
+        if self.login_mode == VaultOpenMode.REGISTER:
+            return
+        vault_name = self.login_vault_name.text().strip() or DEFAULT_VAULT_ID
+        settings = load_profile_settings(self.profile_base_dir, vault_name)
+        self.remember_password_check.blockSignals(True)
+        self.remember_password_check.setChecked(settings.remember_password)
+        self.remember_password_check.blockSignals(False)
+        if not settings.remember_password or not settings.remembered_password:
+            return
+        try:
+            password = unprotect_password(settings.remembered_password)
+        except (OSError, ValueError):
+            self.login_password.clear()
+            return
+        self.login_password.setText(password)
+
+    def _save_remembered_password(self, password: str) -> None:
+        if self.login_mode == VaultOpenMode.REGISTER:
+            return
+        self.profile_settings.remember_password = self.remember_password_check.isChecked()
+        if self.profile_settings.remember_password:
+            self.profile_settings.remembered_password = protect_password(password)
+        else:
+            self.profile_settings.remembered_password = ""
+        save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
 
     def _show_download_history_dialog(self) -> None:
         dialog = QDialog(self)
@@ -1707,6 +1791,12 @@ class MainWindow(QMainWindow):
         self.auto_sync_check.blockSignals(True)
         self.auto_sync_check.setChecked(self.profile_settings.auto_sync_on_close)
         self.auto_sync_check.blockSignals(False)
+        self.theme_combo.blockSignals(True)
+        theme_index = self.theme_combo.findData(
+            normalize_theme_name(self.profile_settings.theme_name)
+        )
+        self.theme_combo.setCurrentIndex(max(0, theme_index))
+        self.theme_combo.blockSignals(False)
         self._sync_auto_lock_controls()
 
     def _choose_backup_dir(self) -> None:
@@ -1772,6 +1862,22 @@ class MainWindow(QMainWindow):
 
     def _set_auto_sync_on_close(self, enabled: bool) -> None:
         self.profile_settings.auto_sync_on_close = enabled
+        save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
+
+    def _apply_theme(self, theme_name: str) -> None:
+        normalized = normalize_theme_name(theme_name)
+        self.active_theme_name = normalized
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(stylesheet_for_theme(normalized))
+
+    def _set_theme_from_settings(self) -> None:
+        theme_name = self.theme_combo.currentData()
+        if not isinstance(theme_name, str):
+            return
+        theme_name = normalize_theme_name(theme_name)
+        self.profile_settings.theme_name = theme_name
+        self._apply_theme(theme_name)
         save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
 
     def _sync_auto_lock_controls(self) -> None:
