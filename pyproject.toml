@@ -1,6 +1,6 @@
 [project]
 name = "safebox"
-version = "2.2.0"
+version = "2.3.0"
 description = "Local Windows 11 style password and private notes manager"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,6 +10,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "Pillow>=10.0.0",
+  "pyinstaller>=6.0.0",
   "pytest>=8.0.0",
   "ruff>=0.4.0",
 ]

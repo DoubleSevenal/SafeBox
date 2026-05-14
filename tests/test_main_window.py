@@ -3,15 +3,20 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtGui import QColor, QImage, QKeyEvent, QPixmap, QTextCursor
 
 from safebox.core.services import VaultService
 from safebox.core.transfer import TransferMessageKind, TransferMessageSender
 from safebox.core.vault_profiles import load_profile_settings, vault_path_for_name
 from safebox.ui import main_window
 from safebox.ui.branding import SAFEBOX_NAV_MARK_PATH
-from safebox.ui.main_window import NOTE_BODY_FONT_SIZE_PT, MainWindow
+from safebox.ui.main_window import (
+    NOTE_BODY_FONT_SIZE_PT,
+    MainWindow,
+    _note_export_suffix_for_choice,
+    _safe_export_filename,
+)
 from safebox.ui.theme import LIGHT_FLUENT_QSS
 
 
@@ -1703,13 +1708,188 @@ def test_new_note_defaults_to_body_font_size(vault_path: Path, monkeypatch, qt_a
 def test_note_toolbar_keeps_format_brush_and_font_size_compact(qt_app) -> None:
     window = MainWindow(lambda name: VaultService(Path(":memory:")))
 
+    assert window.note_export_button.objectName() == "SubtleButton"
+    assert window.note_export_menu.actions()[0].text() == "导出 TXT"
+    assert window.note_export_menu.actions()[1].text() == "导出 Markdown"
+    assert window.note_export_menu.actions()[2].text() == "导出 PDF"
     assert window.note_format_brush_button.objectName() == "FormatButton"
     assert not window.note_format_brush_button.text()
     assert not window.note_format_brush_button.icon().isNull()
+    assert window.note_format_buttons[0] is window.note_format_brush_button
+    assert not window.note_align_left_button.icon().isNull()
+    assert not window.note_align_center_button.icon().isNull()
+    assert not window.note_align_right_button.icon().isNull()
+    assert window.note_color_red_button.objectName() == "ColorButtonRed"
     assert window.note_font_size.objectName() == "FontSizeCombo"
     assert window.note_font_size.currentText() == str(NOTE_BODY_FONT_SIZE_PT)
     assert window.note_font_size.minimumWidth() <= 70
 
+    window.close()
+
+
+def test_note_export_writes_txt_md_and_pdf_files(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    note = window.service.create_secure_note(
+        name='课程/安排:第1版',
+        note="<h1>课程安排</h1><p><strong>周一数学</strong><br>周二英语</p>",
+        category="学习",
+    )
+    window.current_note_id = note.id
+    window._render_note_detail(note)
+
+    txt_path = vault_path.with_name("note.txt")
+    md_path = vault_path.with_name("note.md")
+    pdf_path = vault_path.with_name("note.pdf")
+
+    window._write_note_export(note, txt_path)
+    window._write_note_export(note, md_path)
+    window._write_note_export(note, pdf_path)
+
+    assert "课程安排" in txt_path.read_text(encoding="utf-8")
+    assert "周一数学" in txt_path.read_text(encoding="utf-8")
+    markdown = md_path.read_text(encoding="utf-8")
+    assert "课程安排" in markdown
+    assert "周一数学" in markdown
+    assert pdf_path.read_bytes().startswith(b"%PDF")
+    assert _safe_export_filename(note.name, ".pdf") == "课程_安排_第1版.pdf"
+
+    window.close()
+
+
+def test_note_export_action_saves_dirty_editor_before_export(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._new_note()
+    window.note_title_input.setText("导出前保存")
+    window.note_body.setPlainText("还没点保存的内容")
+    window._enter_note_edit_mode()
+
+    export_path = vault_path.with_name("autosaved.txt")
+    monkeypatch.setattr(window, "_choose_note_export_path", lambda record, suffix: export_path)
+
+    window._export_current_note_as(".txt")
+
+    saved = window.service.get_record(window.current_note_id)
+    assert saved.name == "导出前保存"
+    assert "还没点保存的内容" in saved.note
+    assert export_path.read_text(encoding="utf-8").strip() == "还没点保存的内容"
+
+    window.close()
+
+
+def test_note_export_action_stops_when_dirty_note_title_is_empty(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    monkeypatch.setattr(main_window.QMessageBox, "warning", lambda *args: None)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._new_note()
+    window.note_title_input.setText("")
+    window._enter_note_edit_mode()
+    chosen = []
+    monkeypatch.setattr(
+        window,
+        "_choose_note_export_path",
+        lambda record, suffix: chosen.append((record, suffix)),
+    )
+
+    window._export_current_note_as(".txt")
+
+    assert chosen == []
+
+    window.close()
+
+
+def test_note_export_uses_dialog_filter_suffix() -> None:
+    assert _note_export_suffix_for_choice("", "Markdown 文件 (*.md)", ".pdf") == ".md"
+    assert _note_export_suffix_for_choice(".TXT", "PDF 文件 (*.pdf)", ".pdf") == ".txt"
+    assert _note_export_suffix_for_choice("", "文本文件 (*.txt)", ".pdf") == ".txt"
+
+
+def test_close_window_can_remember_hide_to_tray_choice(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    class CloseEvent:
+        def __init__(self) -> None:
+            self.accepted = False
+            self.ignored = False
+
+        def accept(self) -> None:
+            self.accepted = True
+
+        def ignore(self) -> None:
+            self.ignored = True
+
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "test-vault")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    class TestVaultOpenDialog:
+        def __init__(self, parent=None) -> None:
+            pass
+
+        def exec(self) -> bool:
+            return True
+
+        def values(self) -> tuple[str, str, str, str]:
+            return ("test-vault", "wojiao321.", "", "open")
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", TestVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    monkeypatch.setattr(window, "_prompt_window_close_action", lambda: ("tray", True))
+    hidden = []
+    monkeypatch.setattr(window, "_hide_to_tray", lambda: hidden.append(True))
+
+    event = CloseEvent()
+    window.closeEvent(event)
+
+    assert hidden == [True]
+    assert event.ignored
+    assert not event.accepted
+    assert load_profile_settings(base_dir, "test-vault").window_close_action == "tray"
+
+    window._close_action_override = "exit"
     window.close()
 
 
@@ -1762,5 +1942,82 @@ def test_note_format_brush_copies_current_text_format(qt_app) -> None:
     assert applied.fontPointSize() == 18
     assert applied.foreground().color().name() == "#2563eb"
     assert window.note_format_brush is None
+
+    window.close()
+
+
+def test_note_editor_keyboard_shortcuts_apply_word_like_formatting(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+    window.note_body.setPlainText("hello")
+    cursor = window.note_body.textCursor()
+    cursor.select(QTextCursor.SelectionType.Document)
+    window.note_body.setTextCursor(cursor)
+
+    window.note_body.keyPressEvent(
+        QKeyEvent(
+            QKeyEvent.Type.KeyPress,
+            Qt.Key.Key_B,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+    )
+
+    assert window.note_body.textCursor().charFormat().fontWeight() > 400
+
+    window.close()
+
+
+def test_note_editor_inserts_clipboard_image_as_embedded_html(qt_app) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+    image = QImage(8, 6, QImage.Format.Format_RGB32)
+    image.fill(QColor("#2563eb"))
+    mime_data = QMimeData()
+    mime_data.setImageData(image)
+
+    assert window.note_body.canInsertFromMimeData(mime_data)
+    window.note_body.insertFromMimeData(mime_data)
+
+    html = window.note_body.toHtml()
+    assert "data:image/png;base64," in html
+    assert "max-width:100%" in html
+
+    window.close()
+
+
+def test_save_current_note_keeps_rich_text_and_embedded_images(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "test-vault")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.lock()
+
+    class TestVaultOpenDialog:
+        def __init__(self, parent=None) -> None:
+            pass
+
+        def exec(self) -> bool:
+            return True
+
+        def values(self) -> tuple[str, str, str, str]:
+            return ("test-vault", "wojiao321.", "", "open")
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", TestVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._new_note()
+    window.note_title_input.setText("rich note")
+    window.note_body.setHtml(
+        '<p><strong>bold</strong></p><p><img src="data:image/png;base64,AA=="></p>'
+    )
+
+    window._save_current_note()
+
+    saved = window.service.get_record(window.current_note_id)
+    assert "font-weight" in saved.note or "<strong" in saved.note
+    assert "data:image/png;base64,AA==" in saved.note
 
     window.close()

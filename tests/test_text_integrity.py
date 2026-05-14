@@ -4,7 +4,9 @@ EXCLUDED_PARTS = {
     ".pytest-tmp",
     ".ruff_cache",
     ".test-output",
+    ".venv",
     "__pycache__",
+    "safebox.egg-info",
 }
 MOJIBAKE_MARKERS = (
     chr(0x3F) * 3,

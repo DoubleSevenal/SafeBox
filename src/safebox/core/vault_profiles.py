@@ -16,6 +16,7 @@ class VaultProfileSettings:
     auto_lock_seconds: int = 300
     transfer_download_dir: str = ""
     theme_name: str = "classic"
+    window_close_action: str = ""
     remember_password: bool = False
     remembered_password: str = ""
     trusted_transfer_devices: list[dict[str, str]] = field(default_factory=list)
@@ -54,6 +55,7 @@ def load_profile_settings(base_dir: Path, name: str) -> VaultProfileSettings:
         auto_lock_seconds=int(data.get("auto_lock_seconds", 300)),
         transfer_download_dir=str(data.get("transfer_download_dir", "")),
         theme_name=str(data.get("theme_name", "classic") or "classic"),
+        window_close_action=str(data.get("window_close_action", "")),
         remember_password=bool(data.get("remember_password", False)),
         remembered_password=str(data.get("remembered_password", "")),
         trusted_transfer_devices=[
@@ -79,6 +81,7 @@ def save_profile_settings(base_dir: Path, name: str, settings: VaultProfileSetti
                 "auto_lock_seconds": settings.auto_lock_seconds,
                 "transfer_download_dir": settings.transfer_download_dir,
                 "theme_name": settings.theme_name,
+                "window_close_action": settings.window_close_action,
                 "remember_password": settings.remember_password,
                 "remembered_password": settings.remembered_password,
                 "trusted_transfer_devices": settings.trusted_transfer_devices,

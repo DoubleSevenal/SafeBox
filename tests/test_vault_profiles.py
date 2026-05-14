@@ -37,6 +37,7 @@ def test_profile_settings_persist_auto_lock_seconds(tmp_path: Path) -> None:
         auto_lock_seconds=1200,
         transfer_download_dir="D:\\SafeBoxDownloads",
         theme_name="linear_dark",
+        window_close_action="tray",
         remember_password=True,
         remembered_password="encrypted-token",
     )
@@ -49,6 +50,7 @@ def test_profile_settings_persist_auto_lock_seconds(tmp_path: Path) -> None:
     assert loaded.auto_lock_seconds == 1200
     assert loaded.transfer_download_dir == "D:\\SafeBoxDownloads"
     assert loaded.theme_name == "linear_dark"
+    assert loaded.window_close_action == "tray"
     assert loaded.remember_password
     assert loaded.remembered_password == "encrypted-token"
 

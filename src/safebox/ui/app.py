@@ -19,6 +19,7 @@ def run() -> int:
     app.setStyleSheet(stylesheet_for_theme("classic"))
     window = MainWindow(lambda name: VaultService(vault_path_for_name(app_data_dir(), name)))
     window.setWindowIcon(QIcon(str(SAFEBOX_APP_ICON_PATH)))
+    window._setup_tray_icon()
     window.resize(1120, 720)
     window.show()
     return app.exec()

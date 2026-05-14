@@ -2,8 +2,10 @@
 .ruff_cache/
 .test-output/
 pytest-cache-files-*/
+.venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest-tmp/
 .superpowers/
 .idea/

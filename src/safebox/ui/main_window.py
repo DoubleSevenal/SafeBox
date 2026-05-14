@@ -6,14 +6,21 @@ from shutil import copy2
 from subprocess import Popen
 from uuid import uuid4
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QMarginsF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QIcon,
+    QImage,
+    QKeySequence,
+    QPageLayout,
+    QPageSize,
+    QPdfWriter,
     QPixmap,
     QTextCharFormat,
     QTextCursor,
+    QTextDocument,
+    QTextListFormat,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -37,6 +44,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStackedWidget,
+    QSystemTrayIcon,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -84,6 +92,19 @@ from safebox.ui.dialogs import (
 from safebox.ui.theme import THEME_LABELS, normalize_theme_name, stylesheet_for_theme
 
 FORMAT_BRUSH_ICON_PATH = Path(__file__).resolve().parent / "assets" / "format-brush.svg"
+ALIGN_LEFT_ICON_PATH = Path(__file__).resolve().parent / "assets" / "align-left.svg"
+ALIGN_CENTER_ICON_PATH = Path(__file__).resolve().parent / "assets" / "align-center.svg"
+ALIGN_RIGHT_ICON_PATH = Path(__file__).resolve().parent / "assets" / "align-right.svg"
+NOTE_EXPORT_FILTERS = (
+    "PDF 文件 (*.pdf);;"
+    "Markdown 文件 (*.md);;"
+    "文本文件 (*.txt)"
+)
+NOTE_EXPORT_SUFFIX_BY_FILTER = {
+    "PDF 文件 (*.pdf)": ".pdf",
+    "Markdown 文件 (*.md)": ".md",
+    "文本文件 (*.txt)": ".txt",
+}
 AUTO_LOCK_PRESETS = {
     "5分钟": 5 * 60,
     "20分钟": 20 * 60,
@@ -91,6 +112,124 @@ AUTO_LOCK_PRESETS = {
 }
 NOTE_BODY_FONT_SIZE_PT = 13
 NOTE_HEADING_FONT_SIZE_PT = 18
+NOTE_IMAGE_MAX_WIDTH = 720
+
+
+class NoteEditor(QTextEdit):
+    formatShortcutRequested = Signal(str)
+    imageInserted = Signal()
+
+    def canInsertFromMimeData(self, source) -> bool:
+        return self._image_from_mime(source) is not None or super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source) -> None:
+        image = self._image_from_mime(source)
+        if image is not None:
+            self._insert_image(image)
+            self.imageInserted.emit()
+            return
+        super().insertFromMimeData(source)
+
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.StandardKey.Bold):
+            self.formatShortcutRequested.emit("bold")
+            event.accept()
+            return
+        if event.matches(QKeySequence.StandardKey.Italic):
+            self.formatShortcutRequested.emit("italic")
+            event.accept()
+            return
+        if event.matches(QKeySequence.StandardKey.Underline):
+            self.formatShortcutRequested.emit("underline")
+            event.accept()
+            return
+        modifiers = event.modifiers()
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            key = event.key()
+            shortcuts = {
+                Qt.Key.Key_Minus: "clear",
+                Qt.Key.Key_L: "align_left",
+                Qt.Key.Key_E: "align_center",
+                Qt.Key.Key_R: "align_right",
+                Qt.Key.Key_S: "save",
+                Qt.Key.Key_7: "ordered_list",
+                Qt.Key.Key_8: "bullet_list",
+            }
+            action = shortcuts.get(key)
+            if action:
+                self.formatShortcutRequested.emit(action)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _insert_image(self, image: QImage) -> None:
+        scaled = image
+        if image.width() > NOTE_IMAGE_MAX_WIDTH:
+            scaled = image.scaledToWidth(
+                NOTE_IMAGE_MAX_WIDTH,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        scaled.save(buffer, "PNG")
+        encoded = bytes(buffer.data().toBase64()).decode("ascii")
+        width = scaled.width()
+        height = scaled.height()
+        html = (
+            '<img src="data:image/png;base64,'
+            f'{encoded}" width="{width}" height="{height}" '
+            'style="max-width:100%;height:auto;" />'
+        )
+        self.textCursor().insertHtml(html)
+
+    def _image_from_mime(self, source) -> QImage | None:
+        if not source.hasImage():
+            return None
+        image = source.imageData()
+        if isinstance(image, QPixmap):
+            image = image.toImage()
+        if isinstance(image, QImage) and not image.isNull():
+            return image
+        return None
+
+
+class WindowClosePrompt(QDialog):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("关闭 SafeBox")
+        self._choice: str = ""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(12)
+        title = QLabel("关闭 SafeBox")
+        title.setObjectName("DialogTitle")
+        message = QLabel("你想退出程序，还是隐藏到电脑右下角？")
+        message.setWordWrap(True)
+        self.remember_choice = QCheckBox("记住我的选择")
+        row = QHBoxLayout()
+        self.exit_button = QPushButton("退出")
+        self.exit_button.setObjectName("PrimaryButton")
+        self.hide_button = QPushButton("隐藏到右下角")
+        self.hide_button.setObjectName("SubtleButton")
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setObjectName("SubtleButton")
+        row.addWidget(self.exit_button)
+        row.addWidget(self.hide_button)
+        row.addWidget(self.cancel_button)
+        layout.addWidget(title)
+        layout.addWidget(message)
+        layout.addWidget(self.remember_choice)
+        layout.addLayout(row)
+        self.exit_button.clicked.connect(lambda: self._finish("exit"))
+        self.hide_button.clicked.connect(lambda: self._finish("tray"))
+        self.cancel_button.clicked.connect(self.reject)
+
+    def choice(self) -> tuple[str, bool]:
+        return self._choice, self.remember_choice.isChecked()
+
+    def _finish(self, choice: str) -> None:
+        self._choice = choice
+        self.accept()
 
 
 class MainWindow(QMainWindow):
@@ -113,6 +252,9 @@ class MainWindow(QMainWindow):
         self.transfer_messages_signature = ""
         self.transfer_connect_info_rows: list[QFrame] = []
         self.active_nav_key = ""
+        self._close_action_override: str = ""
+        self.tray_icon: QSystemTrayIcon | None = None
+        self._tray_available = False
         self.account_editing = False
         self.note_editing = False
         self._loading_note_detail = False
@@ -882,6 +1024,13 @@ class MainWindow(QMainWindow):
         self.note_attachments_button = QPushButton("查看附件")
         self.note_attachments_button.setObjectName("SubtleButton")
         self.note_attachments_button.setVisible(False)
+        self.note_export_button = QPushButton("导出")
+        self.note_export_button.setObjectName("SubtleButton")
+        self.note_export_menu = QMenu(self)
+        self.note_export_txt_action = self.note_export_menu.addAction("导出 TXT")
+        self.note_export_md_action = self.note_export_menu.addAction("导出 Markdown")
+        self.note_export_pdf_action = self.note_export_menu.addAction("导出 PDF")
+        self.note_export_button.setMenu(self.note_export_menu)
         self.note_save_button = QPushButton("保存")
         self.note_save_button.setObjectName("PrimaryButton")
         delete = QPushButton("删除")
@@ -889,6 +1038,7 @@ class MainWindow(QMainWindow):
         top.addWidget(back)
         top.addStretch()
         top.addWidget(self.note_attachments_button)
+        top.addWidget(self.note_export_button)
         top.addWidget(self.note_edit_button)
         top.addWidget(self.note_save_button)
         top.addWidget(delete)
@@ -905,12 +1055,36 @@ class MainWindow(QMainWindow):
         self.note_save_notice.setObjectName("SuccessNotice")
         self.note_save_notice.setVisible(False)
         toolbar = QHBoxLayout()
+        undo = QPushButton("↶")
+        undo.setObjectName("FormatButton")
+        undo.setToolTip("撤销 Ctrl+Z")
+        redo = QPushButton("↷")
+        redo.setObjectName("FormatButton")
+        redo.setToolTip("重做 Ctrl+Y")
         bold = QPushButton("B")
         bold.setObjectName("FormatButton")
+        bold.setToolTip("加粗 Ctrl+B")
         italic = QPushButton("I")
         italic.setObjectName("FormatButton")
+        italic.setToolTip("斜体 Ctrl+I")
         underline = QPushButton("U")
         underline.setObjectName("FormatButton")
+        underline.setToolTip("下划线 Ctrl+U")
+        ordered = QPushButton("1.")
+        ordered.setObjectName("FormatButton")
+        ordered.setToolTip("编号列表 Ctrl+7")
+        align_left = QPushButton("L")
+        align_left.setObjectName("FormatButton")
+        align_left.setToolTip("左对齐 Ctrl+L")
+        align_center = QPushButton("C")
+        align_center.setObjectName("FormatButton")
+        align_center.setToolTip("居中 Ctrl+E")
+        align_right = QPushButton("R")
+        align_right.setObjectName("FormatButton")
+        align_right.setToolTip("右对齐 Ctrl+R")
+        insert_image = QPushButton("Img")
+        insert_image.setObjectName("FormatButtonWide")
+        insert_image.setToolTip("插入图片，也支持 Ctrl+V 粘贴图片")
         bullet = QPushButton("•")
         bullet.setObjectName("FormatButton")
         heading = QPushButton("标题")
@@ -933,6 +1107,20 @@ class MainWindow(QMainWindow):
         )
         self.note_font_size.setCurrentText(str(NOTE_BODY_FONT_SIZE_PT))
         self.note_font_size.setFixedWidth(64)
+        self.note_align_left_button = align_left
+        self.note_align_left_button.setText("")
+        self.note_align_left_button.setIcon(QIcon(str(ALIGN_LEFT_ICON_PATH)))
+        self.note_align_left_button.setIconSize(QSize(18, 18))
+        self.note_align_center_button = align_center
+        self.note_align_center_button.setText("")
+        self.note_align_center_button.setIcon(QIcon(str(ALIGN_CENTER_ICON_PATH)))
+        self.note_align_center_button.setIconSize(QSize(18, 18))
+        self.note_align_right_button = align_right
+        self.note_align_right_button.setText("")
+        self.note_align_right_button.setIcon(QIcon(str(ALIGN_RIGHT_ICON_PATH)))
+        self.note_align_right_button.setIconSize(QSize(18, 18))
+        self.note_color_red_button = QPushButton("")
+        self.note_color_red_button.setObjectName("ColorButtonRed")
         color_black = QPushButton("")
         color_black.setObjectName("ColorButtonBlack")
         color_blue = QPushButton("")
@@ -944,11 +1132,16 @@ class MainWindow(QMainWindow):
         color_orange = QPushButton("")
         color_orange.setObjectName("ColorButtonOrange")
         for button in (
+            self.note_format_brush_button,
             bold,
             italic,
             underline,
+            ordered,
+            align_left,
+            align_center,
+            align_right,
+            insert_image,
             bullet,
-            self.note_format_brush_button,
             heading,
             body,
             clear_format,
@@ -957,22 +1150,35 @@ class MainWindow(QMainWindow):
             toolbar.addWidget(button)
         toolbar.addWidget(self.note_font_size)
         toolbar.addSpacing(8)
-        for button in (color_black, color_blue, color_pink, color_green, color_orange):
+        for button in (
+            self.note_color_red_button,
+            color_black,
+            color_blue,
+            color_pink,
+            color_green,
+            color_orange,
+        ):
             toolbar.addWidget(button)
         toolbar.addStretch()
-        self.note_body = QTextEdit()
+        self.note_body = NoteEditor()
         self.note_body.setObjectName("NoteBody")
         self.note_body.setPlaceholderText("在这里写小纸条内容")
         self.note_format_buttons = [
+            self.note_format_brush_button,
             bold,
             italic,
             underline,
+            ordered,
+            align_left,
+            align_center,
+            align_right,
+            insert_image,
             bullet,
-            self.note_format_brush_button,
             heading,
             body,
             clear_format,
             self.note_font_size,
+            self.note_color_red_button,
             color_black,
             color_blue,
             color_pink,
@@ -993,6 +1199,15 @@ class MainWindow(QMainWindow):
         back.clicked.connect(self._show_notes_list_page)
         self.note_edit_button.clicked.connect(self._enter_note_edit_mode)
         self.note_attachments_button.clicked.connect(self._show_current_note_attachments)
+        self.note_export_txt_action.triggered.connect(
+            lambda: self._export_current_note_as(".txt")
+        )
+        self.note_export_md_action.triggered.connect(
+            lambda: self._export_current_note_as(".md")
+        )
+        self.note_export_pdf_action.triggered.connect(
+            lambda: self._export_current_note_as(".pdf")
+        )
         self.note_save_button.clicked.connect(self._save_current_note)
         self.note_category.activated.connect(lambda _: self._save_current_note_category())
         if self.note_category.lineEdit() is not None:
@@ -1000,21 +1215,41 @@ class MainWindow(QMainWindow):
                 self._save_current_note_category
             )
         delete.clicked.connect(self._delete_current_note)
+        undo.clicked.connect(self.note_body.undo)
+        redo.clicked.connect(self.note_body.redo)
         bold.clicked.connect(lambda: self._toggle_text_property("bold"))
         italic.clicked.connect(lambda: self._toggle_text_property("italic"))
         underline.clicked.connect(lambda: self._toggle_text_property("underline"))
-        bullet.clicked.connect(self._insert_bullet)
+        bullet.clicked.connect(lambda: self._toggle_note_list(QTextListFormat.Style.ListDisc))
+        ordered.clicked.connect(
+            lambda: self._toggle_note_list(QTextListFormat.Style.ListDecimal)
+        )
+        align_left.clicked.connect(
+            lambda: self._set_note_alignment(Qt.AlignmentFlag.AlignLeft)
+        )
+        align_center.clicked.connect(
+            lambda: self._set_note_alignment(Qt.AlignmentFlag.AlignCenter)
+        )
+        align_right.clicked.connect(
+            lambda: self._set_note_alignment(Qt.AlignmentFlag.AlignRight)
+        )
+        insert_image.clicked.connect(self._insert_note_image_file)
         heading.clicked.connect(lambda: self._set_text_size(NOTE_HEADING_FONT_SIZE_PT))
         body.clicked.connect(lambda: self._set_text_size(NOTE_BODY_FONT_SIZE_PT))
         self.note_format_brush_button.clicked.connect(self._use_note_format_brush)
         clear_format.clicked.connect(self._clear_note_format)
         copy_all.clicked.connect(self._copy_note_plain_text)
         self.note_font_size.currentTextChanged.connect(self._set_text_size_from_text)
+        self.note_color_red_button.clicked.connect(
+            lambda: self._set_text_color("#dc2626")
+        )
         color_black.clicked.connect(lambda: self._set_text_color("#111827"))
         color_blue.clicked.connect(lambda: self._set_text_color("#2563eb"))
         color_pink.clicked.connect(lambda: self._set_text_color("#db2777"))
         color_green.clicked.connect(lambda: self._set_text_color("#059669"))
         color_orange.clicked.connect(lambda: self._set_text_color("#ea580c"))
+        self.note_body.formatShortcutRequested.connect(self._handle_note_shortcut)
+        self.note_body.imageInserted.connect(lambda: self._show_note_save_notice("已插入图片"))
         return page
 
     def _build_trash_page(self) -> QWidget:
@@ -3442,6 +3677,7 @@ class MainWindow(QMainWindow):
         self.note_body.setReadOnly(not editing)
         self.note_save_button.setVisible(editing)
         self.note_edit_button.setVisible(not editing)
+        self.note_export_button.setEnabled(bool(self.current_note_id))
         for button in self.note_format_buttons:
             button.setEnabled(editing)
 
@@ -3468,6 +3704,53 @@ class MainWindow(QMainWindow):
             self._show_note_save_notice("当前会话没有附件")
             return
         self._show_transfer_attachments_dialog(conversation.id)
+
+    def _export_current_note_as(self, suffix: str = "") -> None:
+        if not self.current_note_id:
+            return
+        if self.note_editing:
+            self._save_current_note()
+            if self.note_editing:
+                return
+            if not self.current_note_id:
+                return
+        suffix = suffix if suffix in {".txt", ".md", ".pdf"} else ".pdf"
+        record = self.service.get_record(self.current_note_id)
+        path = self._choose_note_export_path(record, suffix)
+        if path is None:
+            return
+        try:
+            self._write_note_export(record, path)
+        except OSError as exc:
+            QMessageBox.warning(self, "导出失败", f"无法写入这个文件：{exc}")
+            return
+        self._show_note_save_notice(f"已导出 {path.name}")
+
+    def _choose_note_export_path(self, record: Record, suffix: str) -> Path | None:
+        suggested = _safe_export_filename(record.name, suffix)
+        file_name, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出小纸条",
+            suggested,
+            NOTE_EXPORT_FILTERS,
+            _note_export_filter_for_suffix(suffix),
+        )
+        if not file_name:
+            return None
+        path = Path(file_name)
+        final_suffix = _note_export_suffix_for_choice(path.suffix, selected_filter, suffix)
+        return path.with_suffix(final_suffix)
+
+    def _write_note_export(self, record: Record, path: Path) -> None:
+        suffix = path.suffix.lower()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if suffix == ".pdf":
+            _export_note_pdf(record.note, path)
+            return
+        if suffix == ".md":
+            path.write_text(_note_html_to_markdown(record.note).strip() + "\n", encoding="utf-8")
+            return
+        path.write_text(_note_html_to_plain_text(record.note).strip() + "\n", encoding="utf-8")
 
     def _show_note_source_info(self, note: str) -> None:
         source = _note_source(note)
@@ -3589,6 +3872,62 @@ class MainWindow(QMainWindow):
         text_format.setForeground(QColor(color))
         self._merge_note_format(text_format)
 
+    def _set_note_alignment(self, alignment: Qt.AlignmentFlag) -> None:
+        cursor = self.note_body.textCursor()
+        block_format = cursor.blockFormat()
+        block_format.setAlignment(alignment)
+        cursor.setBlockFormat(block_format)
+        self.note_body.setTextCursor(cursor)
+        self._show_note_save_notice("已调整对齐")
+
+    def _toggle_note_list(self, style: QTextListFormat.Style) -> None:
+        cursor = self.note_body.textCursor()
+        block_format = cursor.blockFormat()
+        list_format = QTextListFormat()
+        if cursor.currentList() is not None and cursor.currentList().format().style() == style:
+            block_format.setObjectIndex(-1)
+            cursor.setBlockFormat(block_format)
+            self.note_body.setTextCursor(cursor)
+            self._show_note_save_notice("已取消列表")
+            return
+        list_format.setStyle(style)
+        cursor.createList(list_format)
+        self.note_body.setTextCursor(cursor)
+        self._show_note_save_notice("已设置列表")
+
+    def _insert_note_image_file(self) -> None:
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            "插入图片",
+            "",
+            "图片文件 (*.png *.jpg *.jpeg *.gif *.webp)",
+        )
+        if not file_name:
+            return
+        image = QImage(file_name)
+        if image.isNull():
+            QMessageBox.warning(self, "插入失败", "无法读取这张图片")
+            return
+        self.note_body._insert_image(image)
+        self._show_note_save_notice("已插入图片")
+
+    def _handle_note_shortcut(self, action: str) -> None:
+        actions = {
+            "bold": lambda: self._toggle_text_property("bold"),
+            "italic": lambda: self._toggle_text_property("italic"),
+            "underline": lambda: self._toggle_text_property("underline"),
+            "clear": self._clear_note_format,
+            "align_left": lambda: self._set_note_alignment(Qt.AlignmentFlag.AlignLeft),
+            "align_center": lambda: self._set_note_alignment(Qt.AlignmentFlag.AlignCenter),
+            "align_right": lambda: self._set_note_alignment(Qt.AlignmentFlag.AlignRight),
+            "ordered_list": lambda: self._toggle_note_list(QTextListFormat.Style.ListDecimal),
+            "bullet_list": lambda: self._toggle_note_list(QTextListFormat.Style.ListDisc),
+            "save": self._save_current_note,
+        }
+        handler = actions.get(action)
+        if handler is not None:
+            handler()
+
     def _capture_note_format(self) -> None:
         self.note_format_brush = QTextCharFormat(self.note_body.currentCharFormat())
         self._show_note_save_notice("已吸取格式")
@@ -3690,9 +4029,83 @@ class MainWindow(QMainWindow):
         self._show_login_page()
 
     def closeEvent(self, event) -> None:
+        is_spontaneous = getattr(event, "spontaneous", lambda: True)()
+        if (
+            not is_spontaneous
+            and not self._close_action_override
+            and self.profile_settings.window_close_action not in {"exit", "tray"}
+        ):
+            self._auto_sync_current_vault()
+            self._stop_transfer_server(close_conversation=True)
+            super().closeEvent(event)
+            return
+        action = self._resolve_window_close_action()
+        if action == "tray":
+            self._hide_to_tray()
+            event.ignore()
+            return
+        if action != "exit":
+            event.ignore()
+            return
         self._auto_sync_current_vault()
         self._stop_transfer_server(close_conversation=True)
         super().closeEvent(event)
+
+    def _setup_tray_icon(self) -> None:
+        self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(self.windowIcon())
+        self.tray_icon.setToolTip("SafeBox")
+        tray_menu = QMenu(self)
+        restore_action = tray_menu.addAction("显示 SafeBox")
+        quit_action = tray_menu.addAction("退出")
+        restore_action.triggered.connect(self._restore_from_tray)
+        quit_action.triggered.connect(self._quit_from_tray)
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._handle_tray_activated)
+        if self._tray_available:
+            self.tray_icon.show()
+
+    def _resolve_window_close_action(self) -> str:
+        if self._close_action_override:
+            action = self._close_action_override
+            self._close_action_override = ""
+            return action
+        if self.profile_settings.window_close_action in {"exit", "tray"}:
+            return self.profile_settings.window_close_action
+        action, remember = self._prompt_window_close_action()
+        if remember and action in {"exit", "tray"}:
+            self.profile_settings.window_close_action = action
+            save_profile_settings(self.profile_base_dir, self.vault_name, self.profile_settings)
+        return action
+
+    def _prompt_window_close_action(self) -> tuple[str, bool]:
+        dialog = WindowClosePrompt(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return "cancel", False
+        return dialog.choice()
+
+    def _hide_to_tray(self) -> None:
+        if self.tray_icon is not None and self._tray_available:
+            self.tray_icon.show()
+        self.hide()
+        self._show_toast("已隐藏到右下角，双击托盘图标可恢复")
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_from_tray(self) -> None:
+        self._close_action_override = "exit"
+        self.close()
+
+    def _handle_tray_activated(self, reason) -> None:
+        if reason in {
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        }:
+            self._restore_from_tray()
 
     def _stop_transfer_server(self, *, close_conversation: bool = False) -> None:
         if self.transfer_server is None:
@@ -4071,6 +4484,56 @@ def _record_search_text(record: Record) -> str:
 
 def _with_note_source(note_html: str, source: str) -> str:
     return f"<!-- safebox-source:{source} -->\n{note_html}"
+
+
+def _note_document(note_html: str) -> QTextDocument:
+    document = QTextDocument()
+    document.setHtml(note_html)
+    return document
+
+
+def _note_html_to_plain_text(note_html: str) -> str:
+    return _note_document(note_html).toPlainText()
+
+
+def _note_html_to_markdown(note_html: str) -> str:
+    document = _note_document(note_html)
+    return document.toMarkdown()
+
+
+def _export_note_pdf(note_html: str, path: Path) -> None:
+    document = _note_document(note_html)
+    writer = QPdfWriter(str(path))
+    writer.setResolution(300)
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setPageMargins(QMarginsF(14, 14, 14, 14), QPageLayout.Unit.Millimeter)
+    document.print_(writer)
+
+
+def _safe_export_filename(title: str, suffix: str) -> str:
+    cleaned = "".join(
+        "_" if char in '<>:"/\\|?*' or ord(char) < 32 else char
+        for char in title.strip()
+    ).strip(" .")
+    return f"{cleaned or '未命名小纸条'}{suffix}"
+
+
+def _note_export_filter_for_suffix(suffix: str) -> str:
+    for label, label_suffix in NOTE_EXPORT_SUFFIX_BY_FILTER.items():
+        if label_suffix == suffix:
+            return label
+    return "PDF 文件 (*.pdf)"
+
+
+def _note_export_suffix_for_choice(
+    path_suffix: str,
+    selected_filter: str,
+    fallback_suffix: str,
+) -> str:
+    suffix = path_suffix.casefold()
+    if suffix in {".txt", ".md", ".pdf"}:
+        return suffix
+    return NOTE_EXPORT_SUFFIX_BY_FILTER.get(selected_filter, fallback_suffix)
 
 
 def _note_source(note_html: str) -> str:

@@ -476,6 +476,7 @@ QPushButton#FormatButton:focus,
 QPushButton#FormatButtonWide:focus {
     border: 1px solid #3b82f6;
 }
+QPushButton#ColorButtonRed,
 QPushButton#ColorButtonBlack,
 QPushButton#ColorButtonBlue,
 QPushButton#ColorButtonPink,
@@ -489,12 +490,16 @@ QPushButton#ColorButtonOrange {
     padding: 0;
     border: 2px solid #ffffff;
 }
+QPushButton#ColorButtonRed:hover,
 QPushButton#ColorButtonBlack:hover,
 QPushButton#ColorButtonBlue:hover,
 QPushButton#ColorButtonPink:hover,
 QPushButton#ColorButtonGreen:hover,
 QPushButton#ColorButtonOrange:hover {
     border: 2px solid #93c5fd;
+}
+QPushButton#ColorButtonRed {
+    background: #dc2626;
 }
 QPushButton#ColorButtonBlack {
     background: #111827;
@@ -1425,6 +1430,7 @@ QComboBox#CategoryPillCombo_Peach {
     border: 1px solid #c2410c;
 }
 QComboBox#CategoryPillCombo_Sky { color: #bae6fd; background: #0c4a6e; border: 1px solid #0284c7; }
+QPushButton#ColorButtonRed,
 QPushButton#ColorButtonBlack,
 QPushButton#ColorButtonBlue,
 QPushButton#ColorButtonPink,
@@ -1438,6 +1444,7 @@ QPushButton#ColorButtonOrange {
     padding: 0;
     border: 2px solid #0b0d12;
 }
+QPushButton#ColorButtonRed { background: #dc2626; }
 QPushButton#ColorButtonBlack { background: #e5e7eb; }
 QPushButton#ColorButtonBlue { background: #60a5fa; }
 QPushButton#ColorButtonPink { background: #f472b6; }
