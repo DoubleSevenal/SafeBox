@@ -1,6 +1,6 @@
 [project]
 name = "safebox"
-version = "2.3.0"
+version = "2.4.0"
 description = "Local Windows 11 style password and private notes manager"
 requires-python = ">=3.11"
 dependencies = [

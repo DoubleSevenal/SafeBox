@@ -5,6 +5,7 @@ from urllib.request import Request, urlopen
 
 from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtGui import QColor, QImage, QKeyEvent, QPixmap, QTextCursor
+from PySide6.QtWidgets import QMessageBox
 
 from safebox.core.services import VaultService
 from safebox.core.transfer import TransferMessageKind, TransferMessageSender
@@ -1727,6 +1728,88 @@ def test_note_toolbar_keeps_format_brush_and_font_size_compact(qt_app) -> None:
     window.close()
 
 
+def test_note_detail_edits_directly_tracks_dirty_and_prompts_on_back(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_notes_page()
+    window._open_note_item(window.note_list.item(0))
+
+    assert not window.note_body.isReadOnly()
+    assert not window.note_title_input.isReadOnly()
+    assert not window.note_dirty
+
+    window.note_body.setPlainText("周一数学\n周二英语")
+
+    assert window.note_dirty
+    assert "*" in window.note_save_button.text()
+    assert window.pages.currentWidget() == window.note_detail_page
+
+    monkeypatch.setattr(
+        main_window.QMessageBox,
+        "question",
+        lambda *args: QMessageBox.StandardButton.No,
+    )
+    window._show_notes_list_page()
+    assert window.pages.currentWidget() == window.note_detail_page
+
+    monkeypatch.setattr(
+        main_window.QMessageBox,
+        "question",
+        lambda *args: QMessageBox.StandardButton.Yes,
+    )
+    window._show_notes_list_page()
+    assert window.pages.currentWidget() == window.notes_page
+
+    saved = window.service.get_record(window.current_note_id)
+    assert "周二英语" not in saved.note
+
+    window.close()
+
+
+def test_note_ctrl_s_saves_dirty_content(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_secure_note(name="课程安排", note="周一数学", category="学习")
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_notes_page()
+    window._open_note_item(window.note_list.item(0))
+    window.note_body.setPlainText("周一数学\n周二英语")
+
+    window.note_save_shortcut.activated.emit()
+
+    saved = window.service.get_record(window.current_note_id)
+    assert "周二英语" in saved.note
+    assert not window.note_dirty
+    window._show_notes_list_page()
+    assert window.pages.currentWidget() == window.notes_page
+
+    window.close()
+
+
 def test_note_export_writes_txt_md_and_pdf_files(
     vault_path: Path,
     monkeypatch,
@@ -1769,6 +1852,58 @@ def test_note_export_writes_txt_md_and_pdf_files(
     window.close()
 
 
+def test_account_export_writes_txt_md_and_pdf_files(
+    vault_path: Path,
+    monkeypatch,
+    qt_app,
+) -> None:
+    base_dir = vault_path.with_suffix("") / "SafeBoxData"
+    vault_path = vault_path_for_name(base_dir, "于祥磊")
+    service = VaultService(vault_path)
+    service.initialize("wojiao321.")
+    service.create_account(
+        name="校园账号",
+        account="student",
+        password="secret",
+        category="学校",
+        entry_hint="官网入口",
+        note="期末前检查",
+    )
+    service.lock()
+
+    monkeypatch.setattr(main_window, "VaultOpenDialog", FakeVaultOpenDialog)
+    monkeypatch.setattr(main_window, "app_data_dir", lambda: base_dir)
+    window = MainWindow(lambda name: VaultService(vault_path_for_name(base_dir, name)))
+    window._open_vault()
+    window._show_accounts_page()
+    window._open_account_item(window.account_list.item(0))
+    record = window.service.get_record(window.current_account_id)
+
+    assert window.account_export_button.objectName() == "SubtleButton"
+    assert window.account_export_menu.actions()[0].text() == "导出 TXT"
+    assert window.account_export_menu.actions()[1].text() == "导出 Markdown"
+    assert window.account_export_menu.actions()[2].text() == "导出 PDF"
+
+    txt_path = vault_path.with_name("account.txt")
+    md_path = vault_path.with_name("account.md")
+    pdf_path = vault_path.with_name("account.pdf")
+
+    window._write_record_export(record, txt_path)
+    window._write_record_export(record, md_path)
+    window._write_record_export(record, pdf_path)
+
+    txt = txt_path.read_text(encoding="utf-8")
+    assert "校园账号" in txt
+    assert "student" in txt
+    assert "secret" in txt
+    markdown = md_path.read_text(encoding="utf-8")
+    assert "校园账号" in markdown
+    assert "期末前检查" in markdown
+    assert pdf_path.read_bytes().startswith(b"%PDF")
+
+    window.close()
+
+
 def test_note_export_action_saves_dirty_editor_before_export(
     vault_path: Path,
     monkeypatch,
@@ -1787,7 +1922,6 @@ def test_note_export_action_saves_dirty_editor_before_export(
     window._new_note()
     window.note_title_input.setText("导出前保存")
     window.note_body.setPlainText("还没点保存的内容")
-    window._enter_note_edit_mode()
 
     export_path = vault_path.with_name("autosaved.txt")
     monkeypatch.setattr(window, "_choose_note_export_path", lambda record, suffix: export_path)
@@ -1820,7 +1954,6 @@ def test_note_export_action_stops_when_dirty_note_title_is_empty(
     window._open_vault()
     window._new_note()
     window.note_title_input.setText("")
-    window._enter_note_edit_mode()
     chosen = []
     monkeypatch.setattr(
         window,

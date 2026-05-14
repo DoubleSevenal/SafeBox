@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from html import escape
 from pathlib import Path
 from shutil import copy2
 from subprocess import Popen
@@ -17,6 +18,7 @@ from PySide6.QtGui import (
     QPageSize,
     QPdfWriter,
     QPixmap,
+    QShortcut,
     QTextCharFormat,
     QTextCursor,
     QTextDocument,
@@ -151,7 +153,6 @@ class NoteEditor(QTextEdit):
                 Qt.Key.Key_L: "align_left",
                 Qt.Key.Key_E: "align_center",
                 Qt.Key.Key_R: "align_right",
-                Qt.Key.Key_S: "save",
                 Qt.Key.Key_7: "ordered_list",
                 Qt.Key.Key_8: "bullet_list",
             }
@@ -257,6 +258,8 @@ class MainWindow(QMainWindow):
         self._tray_available = False
         self.account_editing = False
         self.note_editing = False
+        self.note_dirty = False
+        self._saved_note_snapshot: tuple[str, str, str] = ("", "", "")
         self._loading_note_detail = False
         self.batch_modes: dict[str, bool] = {
             "accounts": False,
@@ -551,10 +554,18 @@ class MainWindow(QMainWindow):
         back.setObjectName("SubtleButton")
         self.account_edit_button = QPushButton("编辑")
         self.account_edit_button.setObjectName("SubtleButton")
+        self.account_export_button = QPushButton("导出")
+        self.account_export_button.setObjectName("SubtleButton")
+        self.account_export_menu = QMenu(self)
+        self.account_export_txt_action = self.account_export_menu.addAction("导出 TXT")
+        self.account_export_md_action = self.account_export_menu.addAction("导出 Markdown")
+        self.account_export_pdf_action = self.account_export_menu.addAction("导出 PDF")
+        self.account_export_button.setMenu(self.account_export_menu)
         delete = QPushButton("删除")
         delete.setObjectName("DangerButton")
         top.addWidget(back)
         top.addStretch()
+        top.addWidget(self.account_export_button)
         top.addWidget(self.account_edit_button)
         top.addWidget(delete)
         account_header = QFrame()
@@ -597,6 +608,15 @@ class MainWindow(QMainWindow):
 
         back.clicked.connect(self._show_accounts_list_page)
         self.account_edit_button.clicked.connect(self._toggle_account_edit)
+        self.account_export_txt_action.triggered.connect(
+            lambda: self._export_current_account_as(".txt")
+        )
+        self.account_export_md_action.triggered.connect(
+            lambda: self._export_current_account_as(".md")
+        )
+        self.account_export_pdf_action.triggered.connect(
+            lambda: self._export_current_account_as(".pdf")
+        )
         delete.clicked.connect(self._delete_current_account)
         copy_account.clicked.connect(lambda: self._copy_current_account_field("account"))
         copy_password.clicked.connect(lambda: self._copy_current_account_field("password"))
@@ -1019,8 +1039,6 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         back = QPushButton("返回")
         back.setObjectName("SubtleButton")
-        self.note_edit_button = QPushButton("编辑")
-        self.note_edit_button.setObjectName("SubtleButton")
         self.note_attachments_button = QPushButton("查看附件")
         self.note_attachments_button.setObjectName("SubtleButton")
         self.note_attachments_button.setVisible(False)
@@ -1039,7 +1057,6 @@ class MainWindow(QMainWindow):
         top.addStretch()
         top.addWidget(self.note_attachments_button)
         top.addWidget(self.note_export_button)
-        top.addWidget(self.note_edit_button)
         top.addWidget(self.note_save_button)
         top.addWidget(delete)
         self.note_title_input = QLineEdit()
@@ -1196,8 +1213,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(toolbar)
         layout.addWidget(self.note_body, 1)
 
-        back.clicked.connect(self._show_notes_list_page)
-        self.note_edit_button.clicked.connect(self._enter_note_edit_mode)
+        back.clicked.connect(self._return_from_note_detail)
         self.note_attachments_button.clicked.connect(self._show_current_note_attachments)
         self.note_export_txt_action.triggered.connect(
             lambda: self._export_current_note_as(".txt")
@@ -1209,11 +1225,7 @@ class MainWindow(QMainWindow):
             lambda: self._export_current_note_as(".pdf")
         )
         self.note_save_button.clicked.connect(self._save_current_note)
-        self.note_category.activated.connect(lambda _: self._save_current_note_category())
-        if self.note_category.lineEdit() is not None:
-            self.note_category.lineEdit().editingFinished.connect(
-                self._save_current_note_category
-            )
+        self.note_category.currentTextChanged.connect(self._mark_note_dirty_from_editor)
         delete.clicked.connect(self._delete_current_note)
         undo.clicked.connect(self.note_body.undo)
         redo.clicked.connect(self.note_body.redo)
@@ -1248,6 +1260,10 @@ class MainWindow(QMainWindow):
         color_pink.clicked.connect(lambda: self._set_text_color("#db2777"))
         color_green.clicked.connect(lambda: self._set_text_color("#059669"))
         color_orange.clicked.connect(lambda: self._set_text_color("#ea580c"))
+        self.note_title_input.textChanged.connect(self._mark_note_dirty_from_editor)
+        self.note_body.textChanged.connect(self._mark_note_dirty_from_editor)
+        self.note_save_shortcut = QShortcut(QKeySequence.StandardKey.Save, page)
+        self.note_save_shortcut.activated.connect(lambda: self._save_current_note())
         self.note_body.formatShortcutRequested.connect(self._handle_note_shortcut)
         self.note_body.imageInserted.connect(lambda: self._show_note_save_notice("已插入图片"))
         return page
@@ -1691,10 +1707,15 @@ class MainWindow(QMainWindow):
             self._refresh_notes()
 
     def _show_notes_list_page(self) -> None:
+        if not self._confirm_discard_dirty_note():
+            return
         self._remember_module_page("notes", self.notes_page)
         self._set_nav("notes")
         self.pages.setCurrentWidget(self.notes_page)
         self._refresh_notes()
+
+    def _return_from_note_detail(self) -> None:
+        self._show_notes_list_page()
 
     def _show_transfer_page(self) -> None:
         self._show_module_page("transfer", self.transfer_page)
@@ -3425,6 +3446,7 @@ class MainWindow(QMainWindow):
         self.account_edit_button.setText("编辑")
         self.account_edit_button.setObjectName("SubtleButton")
         self._refresh_button_style(self.account_edit_button)
+        self.account_export_button.setEnabled(True)
         self.account_title.setText(record.name)
         self.account_meta.setText(f"{record.category} · {record.account}")
         self._clear_account_fields()
@@ -3510,12 +3532,14 @@ class MainWindow(QMainWindow):
         self.note_category.setCurrentText(record.category)
         self._apply_note_category_style(record.category)
         self.note_body.setHtml(record.note)
+        self._saved_note_snapshot = self._current_note_snapshot()
         self._loading_note_detail = False
+        self._set_note_dirty(False)
         self._show_note_source_info(record.note)
         self.note_attachments_button.setVisible(
             bool(self._transfer_conversation_for_note(record.id))
         )
-        self._set_note_edit_mode(False)
+        self._set_note_edit_mode(True)
 
     def _add_account(self) -> None:
         dialog = AccountDialog(self)
@@ -3542,6 +3566,7 @@ class MainWindow(QMainWindow):
         self.account_edit_button.setText("保存")
         self.account_edit_button.setObjectName("PrimaryButton")
         self._refresh_button_style(self.account_edit_button)
+        self.account_export_button.setEnabled(False)
         self._clear_account_fields()
         self._add_edit_field_card(0, 0, "账号", "account", record.account)
         self._add_edit_field_card(0, 1, "密码", "password", record.password)
@@ -3588,7 +3613,6 @@ class MainWindow(QMainWindow):
         )
         self.current_note_id = note.id
         self._render_note_detail(note)
-        self._enter_note_edit_mode()
         self._remember_module_page("notes", self.note_detail_page)
         self.pages.setCurrentWidget(self.note_detail_page)
 
@@ -3622,44 +3646,36 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentWidget(self.note_detail_page)
         self._show_note_save_notice("导入成功")
 
-    def _save_current_note(self) -> None:
+    def _save_current_note(self) -> bool:
         if not self.current_note_id:
-            return
+            return False
         name = self.note_title_input.text().strip()
         note = self.note_body.toHtml().strip()
         category = self.note_category.currentText().strip()
         if not name:
             QMessageBox.warning(self, "信息不完整", "标题需要填写。")
-            return
+            return False
         updated = self.service.update_secure_note(
             self.current_note_id,
             name=name,
             note=note,
             category=category,
         )
-        self._render_note_detail(updated)
-        self._refresh_notes()
-        self._show_note_save_notice("保存成功")
-
-    def _save_current_note_category(self) -> None:
-        if self._loading_note_detail or not self.current_note_id:
-            return
-        record = self.service.get_record(self.current_note_id)
-        category = self.note_category.currentText().strip()
-        if not category or category == record.category:
-            return
-        updated = self.service.update_secure_note(
-            self.current_note_id,
-            name=record.name,
-            note=record.note,
-            category=category,
-        )
         self._loading_note_detail = True
+        self.note_title_input.setText(updated.name)
         self.note_category.setCurrentText(updated.category)
         self._apply_note_category_style(updated.category)
+        self.note_body.setHtml(updated.note)
+        self._saved_note_snapshot = self._current_note_snapshot()
         self._loading_note_detail = False
+        self._set_note_dirty(False)
+        self._show_note_source_info(updated.note)
+        self.note_attachments_button.setVisible(
+            bool(self._transfer_conversation_for_note(updated.id))
+        )
         self._refresh_notes()
-        self._show_note_save_notice("分类已更新")
+        self._show_note_save_notice("保存成功")
+        return True
 
     def _apply_note_category_style(self, category: str) -> None:
         self.note_category.setObjectName(f"CategoryPillCombo_{_category_color_key(category)}")
@@ -3669,17 +3685,50 @@ class MainWindow(QMainWindow):
         self._set_note_edit_mode(True)
 
     def _set_note_edit_mode(self, editing: bool) -> None:
-        self.note_editing = editing
-        if not editing:
-            self.note_format_brush = None
-        self.note_title_input.setReadOnly(not editing)
+        self.note_editing = bool(editing)
+        self.note_title_input.setReadOnly(False)
         self.note_category.setEnabled(True)
-        self.note_body.setReadOnly(not editing)
-        self.note_save_button.setVisible(editing)
-        self.note_edit_button.setVisible(not editing)
+        self.note_body.setReadOnly(False)
+        self.note_save_button.setVisible(True)
         self.note_export_button.setEnabled(bool(self.current_note_id))
         for button in self.note_format_buttons:
-            button.setEnabled(editing)
+            button.setEnabled(True)
+
+    def _current_note_snapshot(self) -> tuple[str, str, str]:
+        return (
+            self.note_title_input.text().strip(),
+            self.note_category.currentText().strip(),
+            self.note_body.toHtml().strip(),
+        )
+
+    def _mark_note_dirty_from_editor(self, *args) -> None:
+        if self._loading_note_detail or not self.current_note_id:
+            return
+        self._set_note_dirty(self._current_note_snapshot() != self._saved_note_snapshot)
+
+    def _set_note_dirty(self, dirty: bool) -> None:
+        self.note_dirty = dirty
+        self.note_title_input.setPlaceholderText("标题 *" if dirty else "标题")
+        self.note_save_button.setText("保存 *" if dirty else "保存")
+        self.note_save_button.setObjectName("PrimaryButton" if dirty else "SubtleButton")
+        self._refresh_button_style(self.note_save_button)
+        self.note_save_notice.setText("未保存 *" if dirty else "已保存")
+        self.note_save_notice.setVisible(dirty)
+        if self.current_note_id and not dirty:
+            self._show_note_source_info(self.service.get_record(self.current_note_id).note)
+
+    def _confirm_discard_dirty_note(self) -> bool:
+        if not self.current_note_id or not self.note_dirty:
+            return True
+        reply = QMessageBox.question(
+            self,
+            "未保存的小纸条",
+            "当前小纸条还有未保存的改动，确定不保存就返回吗？",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+        self._set_note_dirty(False)
+        return True
 
     def _show_note_save_notice(self, text: str = "保存成功") -> None:
         self.note_save_notice.setText(text)
@@ -3708,12 +3757,8 @@ class MainWindow(QMainWindow):
     def _export_current_note_as(self, suffix: str = "") -> None:
         if not self.current_note_id:
             return
-        if self.note_editing:
-            self._save_current_note()
-            if self.note_editing:
-                return
-            if not self.current_note_id:
-                return
+        if self.note_dirty and not self._save_current_note():
+            return
         suffix = suffix if suffix in {".txt", ".md", ".pdf"} else ".pdf"
         record = self.service.get_record(self.current_note_id)
         path = self._choose_note_export_path(record, suffix)
@@ -3727,10 +3772,18 @@ class MainWindow(QMainWindow):
         self._show_note_save_notice(f"已导出 {path.name}")
 
     def _choose_note_export_path(self, record: Record, suffix: str) -> Path | None:
+        return self._choose_record_export_path(record, suffix, "导出小纸条")
+
+    def _choose_record_export_path(
+        self,
+        record: Record,
+        suffix: str,
+        title: str,
+    ) -> Path | None:
         suggested = _safe_export_filename(record.name, suffix)
         file_name, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "导出小纸条",
+            title,
             suggested,
             NOTE_EXPORT_FILTERS,
             _note_export_filter_for_suffix(suffix),
@@ -3742,15 +3795,19 @@ class MainWindow(QMainWindow):
         return path.with_suffix(final_suffix)
 
     def _write_note_export(self, record: Record, path: Path) -> None:
+        self._write_record_export(record, path)
+
+    def _write_record_export(self, record: Record, path: Path) -> None:
         suffix = path.suffix.lower()
         path.parent.mkdir(parents=True, exist_ok=True)
+        html = _record_export_html(record)
         if suffix == ".pdf":
-            _export_note_pdf(record.note, path)
+            _export_note_pdf(html, path)
             return
         if suffix == ".md":
-            path.write_text(_note_html_to_markdown(record.note).strip() + "\n", encoding="utf-8")
+            path.write_text(_note_html_to_markdown(html).strip() + "\n", encoding="utf-8")
             return
-        path.write_text(_note_html_to_plain_text(record.note).strip() + "\n", encoding="utf-8")
+        path.write_text(_note_html_to_plain_text(html).strip() + "\n", encoding="utf-8")
 
     def _show_note_source_info(self, note: str) -> None:
         source = _note_source(note)
@@ -3765,6 +3822,25 @@ class MainWindow(QMainWindow):
         if text:
             self.clipboard.copy(text)
             self._show_account_save_notice("账号已复制" if field == "account" else "密码已复制")
+
+    def _export_current_account_as(self, suffix: str = "") -> None:
+        if not self.current_account_id:
+            return
+        if self.account_editing:
+            self._save_inline_account()
+            if self.account_editing:
+                return
+        suffix = suffix if suffix in {".txt", ".md", ".pdf"} else ".pdf"
+        record = self.service.get_record(self.current_account_id)
+        path = self._choose_record_export_path(record, suffix, "导出账号密码")
+        if path is None:
+            return
+        try:
+            self._write_record_export(record, path)
+        except OSError as exc:
+            QMessageBox.warning(self, "导出失败", f"无法写入这个文件：{exc}")
+            return
+        self._show_account_save_notice(f"已导出 {path.name}")
 
     def _add_field_card(self, row: int, col: int, label: str, key: str, value: str) -> None:
         card = QFrame()
@@ -4499,6 +4575,23 @@ def _note_html_to_plain_text(note_html: str) -> str:
 def _note_html_to_markdown(note_html: str) -> str:
     document = _note_document(note_html)
     return document.toMarkdown()
+
+
+def _record_export_html(record: Record) -> str:
+    if record.type == RecordType.SECURE_NOTE:
+        return record.note
+    rows = [
+        ("账号", record.account),
+        ("密码", record.password),
+        ("分类", record.category),
+        ("入口说明", record.entry_hint),
+        ("备注", record.note),
+    ]
+    items = "\n".join(
+        f"<p><strong>{escape(label)}：</strong>{escape(value or '未填写')}</p>"
+        for label, value in rows
+    )
+    return f"<h1>{escape(record.name)}</h1>\n{items}"
 
 
 def _export_note_pdf(note_html: str, path: Path) -> None:
