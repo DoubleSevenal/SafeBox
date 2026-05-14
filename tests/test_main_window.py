@@ -7,6 +7,7 @@ from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtGui import QColor, QImage, QKeyEvent, QPixmap, QTextCursor
 from PySide6.QtWidgets import QMessageBox
 
+from safebox.core.models import Record, RecordType
 from safebox.core.services import VaultService
 from safebox.core.transfer import TransferMessageKind, TransferMessageSender
 from safebox.core.vault_profiles import load_profile_settings, vault_path_for_name
@@ -1900,6 +1901,31 @@ def test_account_export_writes_txt_md_and_pdf_files(
     assert "校园账号" in markdown
     assert "期末前检查" in markdown
     assert pdf_path.read_bytes().startswith(b"%PDF")
+
+    window.close()
+
+
+def test_account_detail_refresh_clears_previous_export_notice(
+    qt_app,
+) -> None:
+    window = MainWindow(lambda name: VaultService(Path(":memory:")))
+    record = Record(
+        id="account-1",
+        type=RecordType.ACCOUNT,
+        name="邮箱一",
+        account="first@example.com",
+        password="secret1",
+        category="邮箱",
+    )
+
+    window.account_save_notice.setText("已导出 邮箱一.pdf")
+    window.account_save_notice.setVisible(True)
+    assert not window.account_save_notice.isHidden()
+
+    window._render_account_detail(record)
+
+    assert window.account_save_notice.isHidden()
+    assert window.account_save_notice.text() == "保存成功"
 
     window.close()
 

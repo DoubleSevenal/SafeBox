@@ -5,6 +5,7 @@ from html import escape
 from pathlib import Path
 from shutil import copy2
 from subprocess import Popen
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, QMarginsF, QSize, Qt, QTimer, QUrl, Signal
@@ -80,7 +81,6 @@ from safebox.core.vault_profiles import (
     save_profile_settings,
     sync_vault_to_backup,
 )
-from safebox.net.transfer_server import TransferHttpServer
 from safebox.ui.branding import SAFEBOX_LOGIN_LOGO_PATH, SAFEBOX_NAV_MARK_PATH
 from safebox.ui.clipboard import SecureClipboard
 from safebox.ui.dialogs import (
@@ -92,6 +92,9 @@ from safebox.ui.dialogs import (
     VaultOpenMode,
 )
 from safebox.ui.theme import THEME_LABELS, normalize_theme_name, stylesheet_for_theme
+
+if TYPE_CHECKING:
+    from safebox.net.transfer_server import TransferHttpServer
 
 FORMAT_BRUSH_ICON_PATH = Path(__file__).resolve().parent / "assets" / "format-brush.svg"
 ALIGN_LEFT_ICON_PATH = Path(__file__).resolve().parent / "assets" / "align-left.svg"
@@ -2410,6 +2413,8 @@ class MainWindow(QMainWindow):
         )
 
     def _start_transfer_server(self, device_name: str) -> None:
+        from safebox.net.transfer_server import TransferHttpServer
+
         self.transfer_server = TransferHttpServer(self.service, device_name=device_name)
         self.transfer_server.start()
 
@@ -3447,6 +3452,8 @@ class MainWindow(QMainWindow):
         self.account_edit_button.setObjectName("SubtleButton")
         self._refresh_button_style(self.account_edit_button)
         self.account_export_button.setEnabled(True)
+        self.account_save_notice.setText("保存成功")
+        self.account_save_notice.setVisible(False)
         self.account_title.setText(record.name)
         self.account_meta.setText(f"{record.category} · {record.account}")
         self._clear_account_fields()
@@ -3535,6 +3542,8 @@ class MainWindow(QMainWindow):
         self._saved_note_snapshot = self._current_note_snapshot()
         self._loading_note_detail = False
         self._set_note_dirty(False)
+        self.note_save_notice.setText("已保存")
+        self.note_save_notice.setVisible(False)
         self._show_note_source_info(record.note)
         self.note_attachments_button.setVisible(
             bool(self._transfer_conversation_for_note(record.id))
